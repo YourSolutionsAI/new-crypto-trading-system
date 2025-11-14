@@ -1,0 +1,26 @@
+# Backend-Dateien ignorieren (nur Frontend deployen)
+server.js
+package.json
+package-lock.json
+node_modules/
+
+# Backend-spezifische Ordner ignorieren
+GUIDES & CONFIG/
+Supabase SQL Setups/
+Known Bugs & Fixes/
+Node Befehle/
+Projektmanagement/
+
+# Dokumentation ignorieren
+*.md
+!frontend/README.md
+!frontend/DEPLOYMENT.md
+
+# Environment-Dateien ignorieren
+.env
+.env.local
+ENV_TEMPLATE.txt
+
+# Sonstige Backend-Dateien
+TODO.md
+

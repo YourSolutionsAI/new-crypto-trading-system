@@ -1,0 +1,16 @@
+# Ignoriere Backend-Dateien
+../server.js
+../package.json
+../node_modules
+../*.md
+../GUIDES
+../Supabase SQL Setups
+../Known Bugs & Fixes
+../Node Befehle
+../Projektmanagement
+
+# Ignoriere Root-Dateien die nicht zum Frontend gehören
+../.gitignore
+../vercel.json
+../ENV_TEMPLATE.txt
+../TODO.md
