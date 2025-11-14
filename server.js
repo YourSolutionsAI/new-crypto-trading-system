@@ -517,18 +517,21 @@ function calculateQuantity(price, symbol, strategy) {
 
 /**
  * Prüft ob Trading erlaubt ist
+ * @returns {Object} { allowed: boolean, reason: string }
  */
 async function canTrade(signal, strategy) {
   // Trading Master-Switch prüfen
   if (!tradingEnabled) {
-    console.log('⚠️  Trading ist global deaktiviert (TRADING_ENABLED=false)');
-    return false;
+    const reason = 'Trading ist global deaktiviert (TRADING_ENABLED=false)';
+    console.log(`⚠️  ${reason}`);
+    return { allowed: false, reason: reason };
   }
 
   // Binance Client verfügbar?
   if (!binanceClient) {
-    console.log('⚠️  Binance Client nicht verfügbar');
-    return false;
+    const reason = 'Binance Client nicht verfügbar';
+    console.log(`⚠️  ${reason}`);
+    return { allowed: false, reason: reason };
   }
 
   // Trade Cooldown prüfen
@@ -538,9 +541,10 @@ async function canTrade(signal, strategy) {
   
   if (cooldownRemaining > 0) {
     const waitTime = Math.round(cooldownRemaining / 1000);
+    const reason = `Trade Cooldown aktiv - Warte noch ${waitTime}s (${Math.round(waitTime / 60)} Minuten)`;
     // WICHTIG: Deutliches Logging für Render-Logs
     console.log(`⏳ TRADE COOLDOWN AKTIV - Warte noch ${waitTime}s (${Math.round(waitTime / 60)} Minuten)`);
-    return false;
+    return { allowed: false, reason: reason };
   }
 
   // Maximale gleichzeitige Trades prüfen
@@ -548,14 +552,16 @@ async function canTrade(signal, strategy) {
     || botSettings.max_concurrent_trades 
     || 3;
   if (openPositions.size >= maxConcurrentTrades) {
-    console.log(`⚠️  Maximum gleichzeitiger Trades erreicht (${maxConcurrentTrades})`);
-    return false;
+    const reason = `Maximum gleichzeitiger Trades erreicht (${maxConcurrentTrades})`;
+    console.log(`⚠️  ${reason}`);
+    return { allowed: false, reason: reason };
   }
 
   // Bei SELL: Prüfen ob offene Position existiert
   if (signal.action === 'sell') {
     const positionKey = `${strategy.id}_${currentSymbol}`;
     if (!openPositions.has(positionKey)) {
+      const reason = `Keine offene Position zum Verkaufen: ${positionKey}`;
       console.log(`⚠️  KEINE OFFENE POSITION ZUM VERKAUFEN: ${positionKey}`);
       console.log(`   Aktuelle offene Positionen: ${Array.from(openPositions.keys()).join(', ') || 'Keine'}`);
       await logBotEvent('warning', `SELL-Signal ignoriert: Keine offene Position`, {
@@ -564,7 +570,7 @@ async function canTrade(signal, strategy) {
         symbol: currentSymbol,
         strategy_id: strategy.id
       });
-      return false;
+      return { allowed: false, reason: reason };
     }
     
     // KRITISCH: Position SOFORT entfernen, um Race-Conditions zu vermeiden!
@@ -577,7 +583,7 @@ async function canTrade(signal, strategy) {
     signal._positionData = position;
   }
 
-  return true;
+  return { allowed: true, reason: 'OK' };
 }
 
 /**
@@ -586,9 +592,10 @@ async function canTrade(signal, strategy) {
 async function executeTrade(signal, strategy) {
   try {
     // Trading-Checks
-    if (!(await canTrade(signal, strategy))) {
+    const tradeCheck = await canTrade(signal, strategy);
+    if (!tradeCheck.allowed) {
       // Logge warum Trade nicht ausgeführt wird
-      console.log(`⚠️  Trade nicht ausgeführt: canTrade() = false`);
+      console.log(`⚠️  Trade nicht ausgeführt: ${tradeCheck.reason}`);
       return null;
     }
 
@@ -979,19 +986,21 @@ async function startTradingBot() {
 
         // Kauf- oder Verkauf-Signal
         if (signal.action === 'buy' || signal.action === 'sell') {
-          // Cooldown prüfen (nicht zu häufig signalisieren)
+          // WICHTIG: Signal-Cooldown PRÜFEN BEVOR Signal geloggt wird!
           const now = Date.now();
           const signalCooldown = botSettings.signal_cooldown_ms || 60000;
           const signalCooldownRemaining = signalCooldown - (now - lastSignalTime);
           
           if (signalCooldownRemaining > 0) {
+            // Signal-Cooldown aktiv - überspringe Signal (nicht loggen!)
             const verbose = botSettings.logging_verbose === true;
             if (verbose) {
-              console.log(`⏳ Signal Cooldown: ${Math.round(signalCooldownRemaining / 1000)}s`);
+              console.log(`⏳ Signal Cooldown aktiv: ${Math.round(signalCooldownRemaining / 1000)}s - Signal übersprungen`);
             }
-            continue;
+            continue; // WICHTIG: continue, damit Signal nicht verarbeitet wird
           }
 
+          // Signal-Cooldown ist abgelaufen - Signal verarbeiten
           console.log('');
           console.log('═══════════════════════════════════════════════');
           console.log(`🎯 TRADING SIGNAL: ${signal.action.toUpperCase()}`);
@@ -1009,7 +1018,7 @@ async function startTradingBot() {
           // Signal in Datenbank loggen
           await logSignal(signal, strategy);
 
-          // Cooldown setzen
+          // Cooldown setzen - SOFORT nach Signal-Generierung
           lastSignalTime = now;
 
           // Order ausführen (wenn aktiviert)
