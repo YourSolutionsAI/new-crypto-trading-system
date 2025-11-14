@@ -600,13 +600,6 @@ async function canTrade(signal, strategy) {
     return { allowed: false, reason: reason };
   }
 
-  // KRITISCH: Lock-Mechanismus - Verhindert gleichzeitige Trade-Ausführungen
-  if (isTradeInProgress) {
-    const reason = 'Trade-Ausführung läuft bereits - Warte auf Abschluss';
-    console.log(`🔒 ${reason}`);
-    return { allowed: false, reason: reason };
-  }
-
   // Trade Cooldown prüfen
   const now = Date.now();
   const tradeCooldown = botSettings.trade_cooldown_ms || 300000;
@@ -678,29 +671,25 @@ async function canTrade(signal, strategy) {
  * Führt einen Trade auf Binance Testnet aus
  */
 async function executeTrade(signal, strategy) {
-  // KRITISCH: Lock setzen BEVOR irgendwelche Checks gemacht werden
+  // KRITISCH: Lock prüfen BEVOR irgendwelche Checks gemacht werden
   // Dies verhindert, dass mehrere Trades gleichzeitig ausgeführt werden
   if (isTradeInProgress) {
     console.log(`🔒 Trade-Ausführung läuft bereits - Signal wird ignoriert: ${signal.action.toUpperCase()}`);
     return null;
   }
 
-  // Lock aktivieren
-  isTradeInProgress = true;
-
   try {
-    // Trading-Checks (Lock wird hier nicht mehr geprüft, da wir es bereits oben gemacht haben)
+    // Trading-Checks ZUERST durchführen
     const tradeCheck = await canTrade(signal, strategy);
     if (!tradeCheck.allowed) {
-      // Lock wieder freigeben, wenn Trade nicht ausgeführt wird
-      isTradeInProgress = false;
       // Logge warum Trade nicht ausgeführt wird
       console.log(`⚠️  Trade nicht ausgeführt: ${tradeCheck.reason}`);
       return null;
     }
 
-    // KRITISCH: Cooldown SOFORT setzen, NACHDEM alle Checks bestanden wurden
-    // Dies verhindert, dass mehrere Signale gleichzeitig die Cooldown-Prüfung bestehen
+    // KRITISCH: Lock UND Cooldown SOFORT setzen, NACHDEM alle Checks bestanden wurden
+    // Dies verhindert, dass mehrere Signale gleichzeitig die Checks bestehen
+    isTradeInProgress = true;
     lastTradeTime = Date.now();
 
     console.log('');
