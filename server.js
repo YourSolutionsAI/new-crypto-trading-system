@@ -4,6 +4,7 @@ const cors = require('cors');
 const WebSocket = require('ws');
 const { createClient } = require('@supabase/supabase-js');
 const Binance = require('binance-api-node').default;
+const config = require('./config');
 
 // Express-Server initialisieren
 const app = express();
@@ -58,12 +59,10 @@ let botStatus = 'gestoppt';
 let tradingBotProcess = null;
 let activeStrategies = [];
 let priceHistory = [];
-const MAX_PRICE_HISTORY = 100; // Letzte 100 Preise speichern
-let lastSignalTime = 0; // Verhindert zu häufige Signale
-const SIGNAL_COOLDOWN = 60000; // 1 Minute zwischen Signalen
-let lastTradeTime = 0; // Verhindert zu häufige Trades
-const TRADE_COOLDOWN = 300000; // 5 Minuten zwischen Trades
+let lastSignalTime = 0;
+let lastTradeTime = 0;
 let openPositions = new Map(); // Tracking offener Positionen
+let currentSymbol = config.market.symbol; // Aktuelles Trading-Paar
 
 // API-Routen
 
@@ -300,23 +299,35 @@ async function logSignal(signal, strategy) {
 // ═══════════════════════════════════════════════
 
 /**
- * Berechnet die Kaufmenge basierend auf Risk Management
+ * Berechnet die Kaufmenge basierend auf Risk Management & Binance Lot Size
  */
-function calculateQuantity(price, strategy) {
-  const config = strategy.config.risk || {};
-  const maxTradeSize = config.max_trade_size_usdt || 100; // Default: $100
+function calculateQuantity(price, symbol) {
+  const maxTradeSize = config.trading.defaultTradeSize;
   
-  // Berechne Menge basierend auf Preis
+  // Berechne Basis-Menge
   let quantity = maxTradeSize / price;
   
-  // Runde auf sinnige Dezimalstellen (abhängig vom Coin)
-  if (price < 1) {
-    quantity = parseFloat(quantity.toFixed(0)); // Ganze Zahlen für Meme-Coins
-  } else if (price < 100) {
-    quantity = parseFloat(quantity.toFixed(2)); // 2 Dezimalstellen
-  } else {
-    quantity = parseFloat(quantity.toFixed(6)); // 6 Dezimalstellen für BTC/ETH
+  // Hole Lot Size Regeln für das Symbol
+  const lotSize = config.lotSizes[symbol] || config.lotSizes.DEFAULT;
+  
+  // Runde auf Step Size
+  quantity = Math.floor(quantity / lotSize.stepSize) * lotSize.stepSize;
+  
+  // Runde auf korrekte Dezimalstellen
+  quantity = parseFloat(quantity.toFixed(lotSize.decimals));
+  
+  // Prüfe Min/Max
+  if (quantity < lotSize.minQty) {
+    console.log(`⚠️  Berechnete Menge ${quantity} < Minimum ${lotSize.minQty}`);
+    quantity = lotSize.minQty;
   }
+  
+  if (quantity > lotSize.maxQty) {
+    console.log(`⚠️  Berechnete Menge ${quantity} > Maximum ${lotSize.maxQty}`);
+    quantity = lotSize.maxQty;
+  }
+  
+  console.log(`📊 Lot Size Info: Min=${lotSize.minQty}, Step=${lotSize.stepSize}, Decimals=${lotSize.decimals}`);
   
   return quantity;
 }
@@ -339,14 +350,16 @@ function canTrade(signal, strategy) {
 
   // Trade Cooldown prüfen
   const now = Date.now();
-  if (now - lastTradeTime < TRADE_COOLDOWN) {
-    const waitTime = Math.round((TRADE_COOLDOWN - (now - lastTradeTime)) / 1000);
+  const cooldownRemaining = config.trading.tradeCooldown - (now - lastTradeTime);
+  
+  if (cooldownRemaining > 0) {
+    const waitTime = Math.round(cooldownRemaining / 1000);
     console.log(`⏳ Trade Cooldown aktiv - Warte noch ${waitTime}s`);
     return false;
   }
 
   // Maximale gleichzeitige Trades prüfen
-  const maxConcurrentTrades = strategy.config.risk?.max_concurrent_trades || 3;
+  const maxConcurrentTrades = config.trading.maxConcurrentTrades;
   if (openPositions.size >= maxConcurrentTrades) {
     console.log(`⚠️  Maximum gleichzeitiger Trades erreicht (${maxConcurrentTrades})`);
     return false;
@@ -354,7 +367,7 @@ function canTrade(signal, strategy) {
 
   // Bei SELL: Prüfen ob offene Position existiert
   if (signal.action === 'sell') {
-    const positionKey = `${strategy.id}_${strategy.symbol}`;
+    const positionKey = `${strategy.id}_${currentSymbol}`;
     if (!openPositions.has(positionKey)) {
       console.log('⚠️  Keine offene Position zum Verkaufen');
       return false;
@@ -379,9 +392,9 @@ async function executeTrade(signal, strategy) {
     console.log(`🔄 FÜHRE ${signal.action.toUpperCase()}-ORDER AUS`);
     console.log('═══════════════════════════════════════════════');
 
-    const symbol = strategy.symbol;
+    const symbol = currentSymbol; // Verwende das aktuelle Symbol (aus WebSocket)
     const side = signal.action === 'buy' ? 'BUY' : 'SELL';
-    const quantity = calculateQuantity(signal.price, strategy);
+    const quantity = calculateQuantity(signal.price, symbol);
 
     console.log(`📊 Symbol: ${symbol}`);
     console.log(`📈 Seite: ${side}`);
@@ -406,16 +419,19 @@ async function executeTrade(signal, strategy) {
     console.log('');
 
     // Position tracking
-    const positionKey = `${strategy.id}_${symbol}`;
+    const positionKey = `${strategy.id}_${currentSymbol}`;
     if (side === 'BUY') {
       openPositions.set(positionKey, {
+        symbol: symbol,
         entryPrice: signal.price,
         quantity: quantity,
         orderId: order.orderId,
         timestamp: new Date()
       });
+      console.log(`📊 Position geöffnet: ${positionKey}`);
     } else {
       openPositions.delete(positionKey);
+      console.log(`📊 Position geschlossen: ${positionKey}`);
     }
 
     // Trade in Datenbank speichern
@@ -460,7 +476,7 @@ async function saveTradeToDatabase(order, signal, strategy) {
     let pnl = null;
     let pnlPercent = null;
     if (signal.action === 'sell') {
-      const positionKey = `${strategy.id}_${strategy.symbol}`;
+      const positionKey = `${strategy.id}_${currentSymbol}`;
       const position = openPositions.get(positionKey);
       if (position) {
         pnl = (avgPrice - position.entryPrice) * executedQty;
@@ -472,7 +488,7 @@ async function saveTradeToDatabase(order, signal, strategy) {
       .from('trades')
       .insert({
         strategy_id: strategy.id,
-        symbol: strategy.symbol,
+        symbol: currentSymbol,
         side: signal.action,
         price: avgPrice,
         quantity: executedQty,
@@ -573,8 +589,8 @@ async function startTradingBot() {
   lastSignalTime = 0;
 
   // WebSocket-Verbindung zu Binance herstellen
-  // DOGE ist sehr volatil und generiert schnell Signale für Tests!
-  const binanceWsUrl = 'wss://stream.binance.com:9443/ws/dogeusdt@trade';
+  const binanceWsUrl = config.market.websocketUrl;
+  currentSymbol = config.market.symbol; // Setze aktuelles Symbol
   console.log(`🔌 Stelle Verbindung zu Binance her: ${binanceWsUrl}`);
 
   const ws = new WebSocket(binanceWsUrl);
@@ -595,19 +611,17 @@ async function startTradingBot() {
         const currentPrice = parseFloat(message.p);
         const quantity = parseFloat(message.q);
 
-        // Preis anzeigen (alle 10 Preise nur einen anzeigen, um Spam zu vermeiden)
-        if (priceHistory.length % 10 === 0) {
-          console.log(`💰 DOGE/USDT: ${currentPrice.toFixed(6)} USDT | Vol: ${quantity.toFixed(2)} DOGE`);
+        // Preis anzeigen (alle X Preise nur einen anzeigen, um Spam zu vermeiden)
+        if (priceHistory.length % config.signals.priceLogInterval === 0) {
+          const priceDecimals = currentPrice < 1 ? 6 : 2;
+          console.log(`💰 ${currentSymbol}: ${currentPrice.toFixed(priceDecimals)} USDT | Vol: ${quantity.toFixed(2)}`);
         }
 
         // Trading-Logik: Für jede aktive Strategie
         if (activeStrategies.length > 0) {
           for (const strategy of activeStrategies) {
-            // Nur Strategien für das richtige Symbol
-            // Akzeptiere BTCUSDT, DOGEUSDT und andere USDT-Paare
-            if (!strategy.symbol.endsWith('USDT')) {
-              continue;
-            }
+            // Akzeptiere alle USDT-Paare (Symbol-Check nicht mehr nötig)
+            // Das aktuelle Symbol kommt aus der WebSocket-Verbindung
 
             const signal = analyzePrice(currentPrice, strategy);
 
@@ -625,7 +639,12 @@ async function startTradingBot() {
             if (signal.action === 'buy' || signal.action === 'sell') {
               // Cooldown prüfen (nicht zu häufig signalisieren)
               const now = Date.now();
-              if (now - lastSignalTime < SIGNAL_COOLDOWN) {
+              const signalCooldownRemaining = config.signals.signalCooldown - (now - lastSignalTime);
+              
+              if (signalCooldownRemaining > 0) {
+                if (config.logging.verbose) {
+                  console.log(`⏳ Signal Cooldown: ${Math.round(signalCooldownRemaining / 1000)}s`);
+                }
                 continue;
               }
 
@@ -657,7 +676,7 @@ async function startTradingBot() {
               }
             } 
             // Hold-Signal (nur gelegentlich anzeigen)
-            else if (signal.action === 'hold' && priceHistory.length % 50 === 0) {
+            else if (signal.action === 'hold' && config.logging.showHoldSignals && priceHistory.length % config.signals.holdLogInterval === 0) {
               console.log(`📊 Hold - MA${strategy.config.indicators.ma_short}: ${signal.maShort} | MA${strategy.config.indicators.ma_long}: ${signal.maLong} | Diff: ${signal.differencePercent}%`);
             }
           }
