@@ -670,11 +670,26 @@ async function startTradingBot() {
   ws.on('open', () => {
     console.log('✅ Verbindung zu Binance erfolgreich hergestellt');
     botStatus = 'läuft (verbunden)';
+    
+    // Heartbeat-Log alle 5 Minuten, um zu zeigen, dass die Verbindung noch aktiv ist
+    const heartbeatInterval = setInterval(() => {
+      if (tradingBotProcess === ws) {
+        const now = new Date().toISOString();
+        console.log(`💓 Heartbeat: ${now} | Preis-Historie: ${priceHistory.length} | Status: ${botStatus}`);
+      } else {
+        clearInterval(heartbeatInterval);
+      }
+    }, 5 * 60 * 1000); // Alle 5 Minuten
   });
 
   ws.on('message', async (data) => {
     try {
       const message = JSON.parse(data.toString());
+      
+      // Debug: Zeige alle 1000 Nachrichten, dass Daten ankommen
+      if (priceHistory.length % 1000 === 0 && priceHistory.length > 0) {
+        console.log(`📡 Daten empfangen: ${priceHistory.length} Preise verarbeitet | Letzte Aktualisierung: ${new Date().toISOString()}`);
+      }
       
       if (message.p) {  // 'p' ist der Preis bei Binance Trade Streams
         const currentPrice = parseFloat(message.p);
@@ -765,18 +780,42 @@ async function startTradingBot() {
     }
   });
 
-  ws.on('close', () => {
+  ws.on('close', (code, reason) => {
+    const timestamp = new Date().toISOString();
+    console.log('═══════════════════════════════════════════════');
     console.log('🔌 WebSocket-Verbindung wurde geschlossen');
+    console.log(`   Zeitpunkt: ${timestamp}`);
+    console.log(`   Code: ${code}`);
+    console.log(`   Grund: ${reason || 'Unbekannt'}`);
+    console.log(`   Preis-Historie: ${priceHistory.length} Einträge`);
+    console.log('═══════════════════════════════════════════════');
     botStatus = 'gestoppt (Verbindung verloren)';
     tradingBotProcess = null;
     
     // Reset
     activeStrategies = [];
     priceHistory = [];
+    
+    // Versuche automatisch neu zu verbinden nach 30 Sekunden
+    console.log('🔄 Versuche automatische Wiederverbindung in 30 Sekunden...');
+    setTimeout(() => {
+      if (botStatus === 'gestoppt (Verbindung verloren)') {
+        console.log('🔄 Starte automatische Wiederverbindung...');
+        startTradingBot().catch(err => {
+          console.error('❌ Fehler bei automatischer Wiederverbindung:', err);
+        });
+      }
+    }, 30000);
   });
 
   ws.on('error', (error) => {
-    console.error('❌ WebSocket-Fehler:', error);
+    const timestamp = new Date().toISOString();
+    console.error('═══════════════════════════════════════════════');
+    console.error('❌ WebSocket-Fehler');
+    console.error(`   Zeitpunkt: ${timestamp}`);
+    console.error(`   Fehler: ${error.message || error}`);
+    console.error(`   Stack: ${error.stack || 'N/A'}`);
+    console.error('═══════════════════════════════════════════════');
     botStatus = 'Fehler';
     tradingBotProcess = null;
   });
