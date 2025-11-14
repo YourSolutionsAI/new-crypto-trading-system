@@ -16,10 +16,10 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "express": "^4.18.2",
+    "@supabase/supabase-js": "^2.38.4",
+    "binance-api-node": "^0.13.2",
     "cors": "^2.8.5",
-    "ws": "^8.14.2",
-    "@supabase/supabase-js": "^2.38.4"
+    "express": "^4.18.2",
+    "ws": "^8.14.2"
   }
 }
-

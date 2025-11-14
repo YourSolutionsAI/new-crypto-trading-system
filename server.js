@@ -3,6 +3,7 @@ const express = require('express');
 const cors = require('cors');
 const WebSocket = require('ws');
 const { createClient } = require('@supabase/supabase-js');
+const Binance = require('binance-api-node').default;
 
 // Express-Server initialisieren
 const app = express();
@@ -31,6 +32,27 @@ if (!supabaseKey) {
 
 const supabase = createClient(supabaseUrl, supabaseKey);
 
+// Binance Client initialisieren (Testnet)
+const binanceApiKey = process.env.BINANCE_API_KEY;
+const binanceApiSecret = process.env.BINANCE_API_SECRET;
+const tradingEnabled = process.env.TRADING_ENABLED === 'true'; // Master-Switch
+
+let binanceClient = null;
+
+if (binanceApiKey && binanceApiSecret) {
+  binanceClient = Binance({
+    apiKey: binanceApiKey,
+    apiSecret: binanceApiSecret,
+    useServerTime: true,
+    // Testnet URLs
+    httpBase: 'https://testnet.binance.vision',
+    wsBase: 'wss://testnet.binance.vision/ws'
+  });
+  console.log('✅ Binance Testnet Client initialisiert');
+} else {
+  console.warn('⚠️  BINANCE API Keys nicht gesetzt - Trading deaktiviert');
+}
+
 // Globale Variablen
 let botStatus = 'gestoppt';
 let tradingBotProcess = null;
@@ -39,6 +61,9 @@ let priceHistory = [];
 const MAX_PRICE_HISTORY = 100; // Letzte 100 Preise speichern
 let lastSignalTime = 0; // Verhindert zu häufige Signale
 const SIGNAL_COOLDOWN = 60000; // 1 Minute zwischen Signalen
+let lastTradeTime = 0; // Verhindert zu häufige Trades
+const TRADE_COOLDOWN = 300000; // 5 Minuten zwischen Trades
+let openPositions = new Map(); // Tracking offener Positionen
 
 // API-Routen
 
@@ -271,6 +296,252 @@ async function logSignal(signal, strategy) {
 }
 
 // ═══════════════════════════════════════════════
+// TRADING EXECUTION FUNKTIONEN (TESTNET)
+// ═══════════════════════════════════════════════
+
+/**
+ * Berechnet die Kaufmenge basierend auf Risk Management
+ */
+function calculateQuantity(price, strategy) {
+  const config = strategy.config.risk || {};
+  const maxTradeSize = config.max_trade_size_usdt || 100; // Default: $100
+  
+  // Berechne Menge basierend auf Preis
+  let quantity = maxTradeSize / price;
+  
+  // Runde auf sinnige Dezimalstellen (abhängig vom Coin)
+  if (price < 1) {
+    quantity = parseFloat(quantity.toFixed(0)); // Ganze Zahlen für Meme-Coins
+  } else if (price < 100) {
+    quantity = parseFloat(quantity.toFixed(2)); // 2 Dezimalstellen
+  } else {
+    quantity = parseFloat(quantity.toFixed(6)); // 6 Dezimalstellen für BTC/ETH
+  }
+  
+  return quantity;
+}
+
+/**
+ * Prüft ob Trading erlaubt ist
+ */
+function canTrade(signal, strategy) {
+  // Trading Master-Switch prüfen
+  if (!tradingEnabled) {
+    console.log('⚠️  Trading ist global deaktiviert (TRADING_ENABLED=false)');
+    return false;
+  }
+
+  // Binance Client verfügbar?
+  if (!binanceClient) {
+    console.log('⚠️  Binance Client nicht verfügbar');
+    return false;
+  }
+
+  // Trade Cooldown prüfen
+  const now = Date.now();
+  if (now - lastTradeTime < TRADE_COOLDOWN) {
+    const waitTime = Math.round((TRADE_COOLDOWN - (now - lastTradeTime)) / 1000);
+    console.log(`⏳ Trade Cooldown aktiv - Warte noch ${waitTime}s`);
+    return false;
+  }
+
+  // Maximale gleichzeitige Trades prüfen
+  const maxConcurrentTrades = strategy.config.risk?.max_concurrent_trades || 3;
+  if (openPositions.size >= maxConcurrentTrades) {
+    console.log(`⚠️  Maximum gleichzeitiger Trades erreicht (${maxConcurrentTrades})`);
+    return false;
+  }
+
+  // Bei SELL: Prüfen ob offene Position existiert
+  if (signal.action === 'sell') {
+    const positionKey = `${strategy.id}_${strategy.symbol}`;
+    if (!openPositions.has(positionKey)) {
+      console.log('⚠️  Keine offene Position zum Verkaufen');
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
+ * Führt einen Trade auf Binance Testnet aus
+ */
+async function executeTrade(signal, strategy) {
+  try {
+    // Trading-Checks
+    if (!canTrade(signal, strategy)) {
+      return null;
+    }
+
+    console.log('');
+    console.log('═══════════════════════════════════════════════');
+    console.log(`🔄 FÜHRE ${signal.action.toUpperCase()}-ORDER AUS`);
+    console.log('═══════════════════════════════════════════════');
+
+    const symbol = strategy.symbol;
+    const side = signal.action === 'buy' ? 'BUY' : 'SELL';
+    const quantity = calculateQuantity(signal.price, strategy);
+
+    console.log(`📊 Symbol: ${symbol}`);
+    console.log(`📈 Seite: ${side}`);
+    console.log(`💰 Preis: ${signal.price} USDT`);
+    console.log(`🔢 Menge: ${quantity}`);
+    console.log(`💵 Wert: ~${(signal.price * quantity).toFixed(2)} USDT`);
+
+    // Order auf Binance Testnet platzieren
+    const order = await binanceClient.order({
+      symbol: symbol,
+      side: side,
+      type: 'MARKET',
+      quantity: quantity.toString()
+    });
+
+    console.log(`✅ Order ausgeführt!`);
+    console.log(`   Order ID: ${order.orderId}`);
+    console.log(`   Status: ${order.status}`);
+    console.log(`   Ausgeführte Menge: ${order.executedQty}`);
+    console.log(`   Durchschnittspreis: ${order.fills?.[0]?.price || 'N/A'}`);
+    console.log('═══════════════════════════════════════════════');
+    console.log('');
+
+    // Position tracking
+    const positionKey = `${strategy.id}_${symbol}`;
+    if (side === 'BUY') {
+      openPositions.set(positionKey, {
+        entryPrice: signal.price,
+        quantity: quantity,
+        orderId: order.orderId,
+        timestamp: new Date()
+      });
+    } else {
+      openPositions.delete(positionKey);
+    }
+
+    // Trade in Datenbank speichern
+    await saveTradeToDatabase(order, signal, strategy);
+
+    // Cooldown setzen
+    lastTradeTime = Date.now();
+
+    return order;
+
+  } catch (error) {
+    console.error('');
+    console.error('═══════════════════════════════════════════════');
+    console.error('❌ ORDER FEHLGESCHLAGEN');
+    console.error('═══════════════════════════════════════════════');
+    console.error(`Fehler: ${error.message}`);
+    console.error(`Code: ${error.code || 'N/A'}`);
+    console.error('═══════════════════════════════════════════════');
+    console.error('');
+
+    // Fehler in Datenbank loggen
+    await logTradeError(error, signal, strategy);
+
+    return null;
+  }
+}
+
+/**
+ * Speichert ausgeführten Trade in Supabase
+ */
+async function saveTradeToDatabase(order, signal, strategy) {
+  try {
+    // Durchschnittspreis berechnen
+    const avgPrice = order.fills && order.fills.length > 0
+      ? order.fills.reduce((sum, fill) => sum + parseFloat(fill.price), 0) / order.fills.length
+      : parseFloat(signal.price);
+
+    const executedQty = parseFloat(order.executedQty);
+    const total = avgPrice * executedQty;
+
+    // PnL berechnen (bei SELL)
+    let pnl = null;
+    let pnlPercent = null;
+    if (signal.action === 'sell') {
+      const positionKey = `${strategy.id}_${strategy.symbol}`;
+      const position = openPositions.get(positionKey);
+      if (position) {
+        pnl = (avgPrice - position.entryPrice) * executedQty;
+        pnlPercent = ((avgPrice - position.entryPrice) / position.entryPrice) * 100;
+      }
+    }
+
+    const { data, error } = await supabase
+      .from('trades')
+      .insert({
+        strategy_id: strategy.id,
+        symbol: strategy.symbol,
+        side: signal.action,
+        price: avgPrice,
+        quantity: executedQty,
+        total: total,
+        order_id: order.orderId.toString(),
+        status: 'executed',
+        executed_at: new Date().toISOString(),
+        pnl: pnl,
+        pnl_percent: pnlPercent,
+        metadata: {
+          signal: signal,
+          order: {
+            orderId: order.orderId,
+            clientOrderId: order.clientOrderId,
+            transactTime: order.transactTime,
+            fills: order.fills
+          },
+          testnet: true
+        }
+      })
+      .select();
+
+    if (error) {
+      console.error('❌ Fehler beim Speichern in Datenbank:', error.message);
+    } else {
+      console.log('✅ Trade in Datenbank gespeichert');
+      
+      // Bei SELL: PnL anzeigen
+      if (pnl !== null) {
+        const pnlEmoji = pnl >= 0 ? '📈' : '📉';
+        const pnlColor = pnl >= 0 ? '+' : '';
+        console.log(`${pnlEmoji} PnL: ${pnlColor}${pnl.toFixed(2)} USDT (${pnlColor}${pnlPercent.toFixed(2)}%)`);
+      }
+    }
+
+    return data;
+  } catch (error) {
+    console.error('❌ Fehler beim Speichern:', error);
+    return null;
+  }
+}
+
+/**
+ * Loggt Fehler bei fehlgeschlagenen Trades
+ */
+async function logTradeError(error, signal, strategy) {
+  try {
+    await supabase
+      .from('bot_logs')
+      .insert({
+        level: 'error',
+        message: `Trade fehlgeschlagen: ${error.message}`,
+        strategy_id: strategy.id,
+        data: {
+          error: {
+            message: error.message,
+            code: error.code,
+            body: error.body
+          },
+          signal: signal,
+          symbol: strategy.symbol
+        }
+      });
+  } catch (err) {
+    console.error('❌ Fehler beim Loggen des Fehlers:', err);
+  }
+}
+
+// ═══════════════════════════════════════════════
 // TRADING-BOT FUNKTIONEN
 // ═══════════════════════════════════════════════
 
@@ -378,8 +649,12 @@ async function startTradingBot() {
               // Cooldown setzen
               lastSignalTime = now;
 
-              // TODO: Hier später Order-Ausführung (Phase 2)
-              // await executeTrade(signal, strategy);
+              // Order ausführen (wenn aktiviert)
+              if (tradingEnabled && binanceClient) {
+                await executeTrade(signal, strategy);
+              } else {
+                console.log('💡 Trading deaktiviert - Nur Signal-Generierung');
+              }
             } 
             // Hold-Signal (nur gelegentlich anzeigen)
             else if (signal.action === 'hold' && priceHistory.length % 50 === 0) {

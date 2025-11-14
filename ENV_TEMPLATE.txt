@@ -1,0 +1,12 @@
+# Supabase Configuration
+SUPABASE_SERVICE_KEY=your_supabase_service_role_key_here
+
+# Binance Testnet API Keys
+# Get them from: https://testnet.binance.vision/
+BINANCE_API_KEY=your_binance_testnet_api_key_here
+BINANCE_API_SECRET=your_binance_testnet_api_secret_here
+
+# Trading Configuration
+TRADING_ENABLED=false    # Set to 'true' to enable actual trading
+PORT=10000
+
