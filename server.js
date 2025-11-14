@@ -217,6 +217,7 @@ app.get('/api/strategies', async (req, res) => {
 
       return {
         ...strategy,
+        is_active: strategy.active, // Map "active" aus DB zu "is_active" für Frontend
         total_trades: totalTrades,
         profitable_trades: profitableTrades,
         total_pnl: totalPnl,
@@ -275,11 +276,11 @@ app.put('/api/strategies/:id', async (req, res) => {
 app.patch('/api/strategies/:id/toggle', async (req, res) => {
   try {
     const { id } = req.params;
-    const { is_active } = req.body;
+    const { is_active } = req.body; // Frontend sendet is_active
 
     const { data: strategy, error } = await supabase
       .from('strategies')
-      .update({ is_active })
+      .update({ active: is_active }) // Aber DB-Spalte heißt "active"
       .eq('id', id)
       .select()
       .single();
@@ -340,8 +341,8 @@ app.get('/api/positions', async (req, res) => {
     // Lade nur AKTIVE Strategien, um nur relevante offene Positionen zu finden
     const { data: allStrategies, error: strategiesError } = await supabase
       .from('strategies')
-      .select('id, symbol, name, is_active')
-      .eq('is_active', true); // NUR aktive Strategien
+      .select('id, symbol, name, active')
+      .eq('active', true); // NUR aktive Strategien
     
     if (strategiesError) {
       console.error('Fehler beim Laden der Strategien:', strategiesError);
