@@ -9,7 +9,7 @@
 
 **Ziel:** Vollständig konfigurierbarer, automatischer Krypto-Trading-Bot mit Supabase-Integration und Binance Testnet-Anbindung.
 
-**Status:** ✅ **Phase 1 abgeschlossen** - Bot läuft live auf Render, handelt automatisch im Testnet
+**Status:** ✅ **Phase 2 abgeschlossen** - Multi-Coin Trading implementiert, Bot kann mehrere Coins gleichzeitig handeln
 
 ---
 
@@ -25,7 +25,7 @@
 - ✅ Render für Hosting
 
 #### **Dateien:**
-- ✅ `server.js` (832 Zeilen) - Haupt-Backend
+- ✅ `server.js` (1447 Zeilen) - Haupt-Backend (Multi-Coin Support)
 - ✅ `package.json` - Dependencies
 - ✅ `.gitignore` - Git-Konfiguration
 
@@ -44,12 +44,11 @@
 **`bot_settings`** - Globale Bot-Einstellungen
 - ✅ Lot Size Regeln für 8 Coins
 - ✅ WebSocket URLs pro Symbol
-- ✅ Trade Cooldown (5 Minuten Standard)
-- ✅ Signal Cooldown (1 Minute Standard)
-- ✅ Signal Threshold (0.01% Standard)
 - ✅ Max Concurrent Trades (3 Standard)
+- ✅ Max Total Exposure (1000 USDT Standard)
 - ✅ Logging-Einstellungen
 - ✅ Max Price History (100 Standard)
+- ⚠️ **Signal Threshold, Signal Cooldown, Trade Cooldown** → Jetzt pro Strategie in `config.settings`
 
 **`trades`** - Handelshistorie
 - ✅ Alle ausgeführten Trades
@@ -77,6 +76,7 @@
 - ✅ `bot_configuration.sql` - Bot-Einstellungen Setup
 - ✅ `add_multi_coin_strategies.sql` - Multi-Coin Strategien
 - ✅ `update_symbols.sql` - Symbol-Management
+- ✅ `strategy_settings_per_coin.sql` - Pro-Coin Strategie-Einstellungen (NEU!)
 
 ---
 
@@ -87,8 +87,9 @@
 - ✅ MA20 (kurz) vs MA50 (lang)
 - ✅ BUY-Signal: MA20 > MA50 (Bullish)
 - ✅ SELL-Signal: MA20 < MA50 (Bearish)
-- ✅ Threshold-basiert (konfigurierbar über Supabase)
+- ✅ **Pro-Coin Threshold** (DOGE: 0.01%, BTC: 0.002%, etc.)
 - ✅ Konfidenz-Berechnung
+- ✅ Validierung beim Laden (fehlende Einstellungen werden erkannt)
 
 #### **Order-Ausführung:**
 - ✅ Automatische BUY Orders bei BUY-Signal
@@ -98,10 +99,13 @@
 - ✅ Quantity-Anpassung nach Binance-Regeln
 
 #### **Risk Management:**
-- ✅ Trade Cooldown (verhindert Over-Trading)
-- ✅ Max Concurrent Trades
+- ✅ **Pro-Coin Trade Cooldown** (konfigurierbar pro Strategie)
+- ✅ **Pro-Coin Signal Cooldown** (konfigurierbar pro Strategie)
+- ✅ Max Concurrent Trades (global)
+- ✅ **Gesamt-Exposure Tracking** (über alle Coins)
+- ✅ Max Total Exposure Limit
 - ✅ Trade-Größe konfigurierbar
-- ✅ Position Tracking
+- ✅ Position Tracking (pro Symbol)
 
 #### **Performance Tracking:**
 - ✅ PnL-Berechnung bei jedem SELL
@@ -130,16 +134,20 @@
 - ✅ **KEINE** config.js mehr (komplett entfernt)
 - ✅ Alle Einstellungen in `bot_settings` Tabelle
 - ✅ Alle Strategien in `strategies` Tabelle
+- ✅ **Pro-Coin Einstellungen** in `strategies.config.settings`
 - ✅ Frontend-ready (alle Werte über UI änderbar)
 
 #### **Konfigurierbare Parameter:**
 
-**Trading:**
-- Trade Cooldown (ms)
-- Signal Cooldown (ms)
-- Signal Threshold (%)
+**Trading (Global):**
 - Max Concurrent Trades
+- Max Total Exposure (USDT)
 - Default Trade Size (USDT)
+
+**Trading (Pro-Coin in `strategies.config.settings`):**
+- ✅ Signal Threshold (%) - Pro Coin unterschiedlich
+- ✅ Signal Cooldown (ms) - Pro Coin unterschiedlich
+- ✅ Trade Cooldown (ms) - Pro Coin unterschiedlich
 
 **Technisch:**
 - Lot Sizes pro Coin (minQty, maxQty, stepSize, decimals)
@@ -171,10 +179,17 @@
 7. ADAUSDT (Cardano) - Mittel volatil
 8. SHIBUSDT (Shiba Inu) - Extrem volatil
 
-#### **Phase 2: Mehrere Coins gleichzeitig (🔄 Geplant)**
-- 🔄 Multiple WebSocket-Verbindungen
-- 🔄 Parallel Processing
-- 🔄 Gesamt-Risk Management
+#### **Phase 2: Mehrere Coins gleichzeitig (✅ Implementiert)**
+- ✅ **Multiple WebSocket-Verbindungen** (eine pro Symbol)
+- ✅ **Parallel Processing** (alle Coins gleichzeitig)
+- ✅ **Separate Preis-Historien** pro Symbol
+- ✅ **Symbol-spezifische Signal-Cooldowns**
+- ✅ **Symbol-spezifische Trade-Cooldowns**
+- ✅ **Gesamt-Risk Management** (calculateTotalExposure)
+- ✅ **Pro-Coin Strategie-Einstellungen** (Threshold, Cooldowns)
+- ✅ **Validierung beim Laden** (ungültige Strategien werden ausgeschlossen)
+- ✅ **Auto-Reconnect** pro Symbol bei Verbindungsverlust
+- ✅ **Doppelausführungs-Schutz** (Trade-Lock pro Symbol)
 
 ---
 
@@ -200,7 +215,7 @@
 
 ```
 new-crypto-trading-system/
-├── server.js                          # Haupt-Backend (832 Zeilen)
+├── server.js                          # Haupt-Backend (1447 Zeilen)
 ├── package.json                       # Dependencies
 ├── .gitignore                        # Git-Konfiguration
 │
@@ -208,7 +223,8 @@ new-crypto-trading-system/
 │   ├── supabase_setup.sql            # Initiales Schema
 │   ├── bot_configuration.sql         # Bot-Einstellungen
 │   ├── add_multi_coin_strategies.sql # Multi-Coin Strategien
-│   └── update_symbols.sql            # Symbol-Management
+│   ├── update_symbols.sql            # Symbol-Management
+│   └── strategy_settings_per_coin.sql # Pro-Coin Einstellungen (NEU!)
 │
 ├── GUIDES & CONFIG/
 │   ├── GUIDES/
@@ -293,8 +309,8 @@ new-crypto-trading-system/
 ## 📊 Aktuelle Statistiken
 
 ### **Code:**
-- **server.js:** 832 Zeilen
-- **SQL-Scripts:** 4 Dateien, ~900 Zeilen
+- **server.js:** 1447 Zeilen (+615 Zeilen für Multi-Coin Support)
+- **SQL-Scripts:** 5 Dateien, ~1100 Zeilen
 - **Dokumentation:** 6 Guides, ~2000 Zeilen
 
 ### **Datenbank:**
@@ -320,8 +336,12 @@ new-crypto-trading-system/
 - [x] Position Tracking
 - [x] PnL-Berechnung
 - [x] Multi-Coin Strategien (Phase 1)
+- [x] **Multi-Coin Trading (Phase 2)** - Mehrere Coins gleichzeitig
+- [x] **Pro-Coin Strategie-Einstellungen** - Threshold, Cooldowns pro Coin
+- [x] **Gesamt-Exposure Tracking** - Über alle Coins
+- [x] **Validierung beim Laden** - Ungültige Strategien werden erkannt
 - [x] Vollständige Supabase-Konfiguration
-- [x] Risk Management
+- [x] Risk Management (erweitert)
 - [x] Logging & Monitoring
 - [x] Performance Tracking
 
@@ -354,7 +374,11 @@ new-crypto-trading-system/
 
 ### **Multi-Coin:**
 - ✅ **Phase 1:** Einzelne Coins (implementiert)
-- 🔄 **Phase 2:** Mehrere gleichzeitig (geplant)
+- ✅ **Phase 2:** Mehrere gleichzeitig (implementiert)
+  - Multiple WebSocket-Verbindungen
+  - Parallel Processing
+  - Pro-Coin Einstellungen
+  - Gesamt-Risk Management
 
 ---
 
@@ -388,18 +412,22 @@ new-crypto-trading-system/
 
 1. ✅ **Bot läuft live** auf Render
 2. ✅ **Automatisches Trading** im Testnet funktioniert
-3. ✅ **Multi-Coin Support** Phase 1 implementiert
-4. ✅ **Vollständig konfigurierbar** über Supabase
-5. ✅ **Keine Code-Änderungen** mehr nötig für Einstellungen
+3. ✅ **Multi-Coin Support** Phase 1 & 2 implementiert
+4. ✅ **Mehrere Coins gleichzeitig** handeln möglich
+5. ✅ **Pro-Coin Einstellungen** für maximale Flexibilität
+6. ✅ **Vollständig konfigurierbar** über Supabase
+7. ✅ **Keine Code-Änderungen** mehr nötig für Einstellungen
+8. ✅ **Sicherheitsfeatures** - Validierung und explizite Konfiguration
 
 ---
 
-**Status:** ✅ **PRODUCTION READY** (Testnet)
+**Status:** ✅ **PRODUCTION READY** (Testnet) - Phase 2 abgeschlossen
 
-**Nächster Schritt:** Siehe `NEXT_STEPS_ROADMAP.md`
+**Nächster Schritt:** Phase 3 (Stop-Loss/Take-Profit) oder Multi-Coin Testing mit mehreren Coins gleichzeitig
 
 ---
 
 *Erstellt: 14. Januar 2025*  
-*Letzte Aktualisierung: 14. Januar 2025*
+*Letzte Aktualisierung: 14. Januar 2025*  
+*Phase 2 abgeschlossen: 14. Januar 2025*
 

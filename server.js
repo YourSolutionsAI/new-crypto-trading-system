@@ -240,48 +240,103 @@ async function loadOpenPositions() {
       
       console.log(`   📊 ${symbol}: ${buyCount} BUY-Trades, ${sellCount} SELL-Trades`);
       
-      // Paare BUY- und SELL-Trades chronologisch
-      // FIFO (First In First Out): Älteste BUY-Trades werden zuerst verkauft
-      let buyIndex = 0;
-      let sellIndex = 0;
-      let totalOpenQuantity = 0;
-      let weightedAveragePrice = 0;
-      let totalValue = 0;
-      const openBuyTrades = [];
+      // KRITISCH: Korrigierte FIFO-Logik (First In First Out)
+      // Jeder SELL schließt den ältesten noch offenen BUY
+      // Wir müssen alle Trades chronologisch sortieren und dann paaren
       
-      // Paare BUY- und SELL-Trades
-      while (buyIndex < buyCount && sellIndex < sellCount) {
-        const buyTrade = buyTrades[buyIndex];
-        const sellTrade = sellTrades[sellIndex];
-        
-        // Wenn BUY vor SELL war, ist BUY noch offen
-        if (new Date(buyTrade.executed_at) < new Date(sellTrade.executed_at)) {
-          openBuyTrades.push(buyTrade);
-          totalOpenQuantity += parseFloat(buyTrade.quantity);
-          totalValue += parseFloat(buyTrade.price) * parseFloat(buyTrade.quantity);
-          buyIndex++;
-        } else {
-          // SELL schließt BUY
-          buyIndex++;
-          sellIndex++;
+      // Kombiniere alle Trades und sortiere chronologisch
+      const allTrades = [];
+      if (buyTrades) {
+        buyTrades.forEach(trade => {
+          allTrades.push({ ...trade, type: 'buy' });
+        });
+      }
+      if (sellTrades) {
+        sellTrades.forEach(trade => {
+          allTrades.push({ ...trade, type: 'sell' });
+        });
+      }
+      
+      // Sortiere alle Trades chronologisch nach executed_at
+      allTrades.sort((a, b) => new Date(a.executed_at) - new Date(b.executed_at));
+      
+      // FIFO-Logik: Jeder SELL schließt den ältesten noch offenen BUY
+      const openBuyTrades = [];
+      let totalOpenQuantity = 0;
+      let totalValue = 0;
+      
+      for (const trade of allTrades) {
+        if (trade.type === 'buy') {
+          // BUY-Trade hinzufügen
+          openBuyTrades.push(trade);
+          totalOpenQuantity += parseFloat(trade.quantity);
+          totalValue += parseFloat(trade.price) * parseFloat(trade.quantity);
+        } else if (trade.type === 'sell') {
+          // SELL-Trade: Schließt den ältesten noch offenen BUY (FIFO)
+          if (openBuyTrades.length === 0) {
+            // KEIN BUY vorhanden - das sollte nicht passieren, aber wir loggen es
+            console.warn(`⚠️  [${symbol}] SELL-Trade ohne offene BUY-Position gefunden: ${trade.order_id} @ ${trade.executed_at}`);
+            await logBotEvent('warning', `SELL ohne BUY-Position gefunden`, {
+              symbol: symbol,
+              strategy_id: strategy.id,
+              trade_id: trade.id,
+              order_id: trade.order_id,
+              executed_at: trade.executed_at
+            });
+            continue; // Überspringe diesen SELL
+          }
+          
+          // Entferne den ältesten BUY (FIFO)
+          const closedBuyTrade = openBuyTrades.shift();
+          const closedQuantity = parseFloat(closedBuyTrade.quantity);
+          const closedValue = parseFloat(closedBuyTrade.price) * closedQuantity;
+          
+          totalOpenQuantity -= closedQuantity;
+          totalValue -= closedValue;
+          
+          // Wenn der SELL mehr verkauft als der BUY gekauft hat, müssen wir weitere BUYs schließen
+          const sellQuantity = parseFloat(trade.quantity);
+          let remainingSellQuantity = sellQuantity - closedQuantity;
+          
+          while (remainingSellQuantity > 0 && openBuyTrades.length > 0) {
+            const nextBuyTrade = openBuyTrades.shift();
+            const nextBuyQuantity = parseFloat(nextBuyTrade.quantity);
+            const nextBuyValue = parseFloat(nextBuyTrade.price) * nextBuyQuantity;
+            
+            if (remainingSellQuantity >= nextBuyQuantity) {
+              // Dieser BUY wird komplett geschlossen
+              totalOpenQuantity -= nextBuyQuantity;
+              totalValue -= nextBuyValue;
+              remainingSellQuantity -= nextBuyQuantity;
+            } else {
+              // Nur teilweise geschlossen - wir müssen die Position anpassen
+              // Für Einfachheit: Wir nehmen den ganzen BUY und passen die Menge an
+              totalOpenQuantity -= remainingSellQuantity;
+              totalValue -= (parseFloat(nextBuyTrade.price) * remainingSellQuantity);
+              
+              // Füge den verbleibenden Teil wieder hinzu
+              const remainingBuyQuantity = nextBuyQuantity - remainingSellQuantity;
+              openBuyTrades.unshift({
+                ...nextBuyTrade,
+                quantity: remainingBuyQuantity.toString()
+              });
+              remainingSellQuantity = 0;
+            }
+          }
+          
+          if (remainingSellQuantity > 0) {
+            // Mehr verkauft als gekauft - das sollte nicht passieren
+            console.warn(`⚠️  [${symbol}] SELL-Trade verkauft mehr als gekauft: ${trade.order_id} (Verkauft: ${sellQuantity}, Offen: ${totalOpenQuantity})`);
+          }
         }
       }
       
-      // Alle verbleibenden BUY-Trades sind offen
-      while (buyIndex < buyCount) {
-        const buyTrade = buyTrades[buyIndex];
-        openBuyTrades.push(buyTrade);
-        totalOpenQuantity += parseFloat(buyTrade.quantity);
-        totalValue += parseFloat(buyTrade.price) * parseFloat(buyTrade.quantity);
-        buyIndex++;
-      }
-      
       // Wenn es offene Positionen gibt, speichere sie
-      if (openBuyTrades.length > 0) {
+      if (openBuyTrades.length > 0 && totalOpenQuantity > 0) {
         const positionKey = `${strategy.id}_${symbol}`;
         
         // Berechne gewichteten Durchschnittspreis
-        weightedAveragePrice = totalValue / totalOpenQuantity;
+        const weightedAveragePrice = totalValue / totalOpenQuantity;
         
         // Verwende den letzten BUY-Trade für Order-ID und Timestamp
         const lastBuyTrade = openBuyTrades[openBuyTrades.length - 1];
@@ -293,6 +348,7 @@ async function loadOpenPositions() {
           orderId: lastBuyTrade.order_id,
           timestamp: new Date(lastBuyTrade.executed_at),
           buyTradeCount: openBuyTrades.length,
+          strategyId: strategy.id, // WICHTIG: Strategie-ID speichern für Validierung
           individualTrades: openBuyTrades.map(t => ({
             orderId: t.order_id,
             price: parseFloat(t.price),
@@ -301,13 +357,20 @@ async function loadOpenPositions() {
           }))
         });
         
-        console.log(`✅ Offene Position geladen: ${symbol}`);
+        console.log(`✅ Offene Position geladen: ${positionKey}`);
         console.log(`   📊 Anzahl BUY-Trades: ${openBuyTrades.length}`);
         console.log(`   💰 Gesamtmenge: ${totalOpenQuantity.toFixed(2)}`);
         console.log(`   💵 Gewichteter Durchschnittspreis: ${weightedAveragePrice.toFixed(6)} USDT`);
         console.log(`   📈 Gesamtwert: ${totalValue.toFixed(2)} USDT`);
       } else {
-        console.log(`   ✅ Keine offenen Positionen für ${symbol}`);
+        console.log(`   ✅ Keine offenen Positionen für ${symbol} (Strategie: ${strategy.id})`);
+        
+        // WICHTIG: Stelle sicher, dass keine Position für diese Strategie/Symbol-Kombination existiert
+        const positionKey = `${strategy.id}_${symbol}`;
+        if (openPositions.has(positionKey)) {
+          console.log(`   🗑️  Entferne ungültige Position: ${positionKey}`);
+          openPositions.delete(positionKey);
+        }
       }
     }
     
@@ -756,24 +819,53 @@ async function canTrade(signal, strategy) {
   // Bei SELL: Prüfen ob offene Position existiert
   if (signal.action === 'sell') {
     const positionKey = `${strategy.id}_${symbol}`;
+    
+    // KRITISCH: Prüfe ob Position existiert UND ob sie zu dieser Strategie gehört
     if (!openPositions.has(positionKey)) {
       const reason = `Keine offene Position zum Verkaufen: ${positionKey}`;
       console.log(`⚠️  KEINE OFFENE POSITION ZUM VERKAUFEN: ${positionKey}`);
+      console.log(`   Strategie: ${strategy.name} (ID: ${strategy.id})`);
+      console.log(`   Symbol: ${symbol}`);
       console.log(`   Aktuelle offene Positionen: ${Array.from(openPositions.keys()).join(', ') || 'Keine'}`);
+      
+      // Zeige alle offenen Positionen für Debugging
+      if (openPositions.size > 0) {
+        console.log(`   📊 Details der offenen Positionen:`);
+        openPositions.forEach((pos, key) => {
+          console.log(`      ${key}: ${pos.quantity.toFixed(2)} @ ${pos.entryPrice.toFixed(6)} USDT (Strategie-ID: ${pos.strategyId || 'N/A'})`);
+        });
+      }
+      
       await logBotEvent('warning', `SELL-Signal ignoriert: Keine offene Position`, {
         positionKey: positionKey,
         openPositions: Array.from(openPositions.keys()),
         symbol: symbol,
-        strategy_id: strategy.id
+        strategy_id: strategy.id,
+        strategy_name: strategy.name
+      });
+      return { allowed: false, reason: reason };
+    }
+    
+    // Zusätzliche Validierung: Stelle sicher, dass die Position zu dieser Strategie gehört
+    const position = openPositions.get(positionKey);
+    if (position.strategyId && position.strategyId !== strategy.id) {
+      const reason = `Position gehört zu einer anderen Strategie: ${positionKey} (Position-Strategie: ${position.strategyId}, Aktuelle Strategie: ${strategy.id})`;
+      console.error(`❌ ${reason}`);
+      await logBotEvent('error', `SELL-Signal abgelehnt: Position gehört zu anderer Strategie`, {
+        positionKey: positionKey,
+        positionStrategyId: position.strategyId,
+        currentStrategyId: strategy.id,
+        symbol: symbol
       });
       return { allowed: false, reason: reason };
     }
     
     // KRITISCH: Position SOFORT entfernen, um Race-Conditions zu vermeiden!
     // Wenn mehrere SELL-Signale gleichzeitig kommen, wird nur der erste ausgeführt
-    const position = openPositions.get(positionKey);
     openPositions.delete(positionKey); // SOFORT löschen, bevor Trade ausgeführt wird
-    console.log(`📊 Position reserviert für SELL: ${positionKey} @ ${position.entryPrice} USDT`);
+    console.log(`📊 Position reserviert für SELL: ${positionKey} @ ${position.entryPrice.toFixed(6)} USDT`);
+    console.log(`   Menge: ${position.quantity.toFixed(2)}`);
+    console.log(`   Entry Price: ${position.entryPrice.toFixed(6)} USDT`);
     
     // Position-Daten an Signal anhängen, damit sie später verwendet werden können
     signal._positionData = position;
@@ -836,10 +928,12 @@ async function executeTrade(signal, strategy) {
       ? order.fills.reduce((sum, fill) => sum + parseFloat(fill.price), 0) / order.fills.length
       : parseFloat(signal.price);
 
+    const executedQty = parseFloat(order.executedQty);
+    
     console.log(`✅ Order ausgeführt!`);
     console.log(`   Order ID: ${order.orderId}`);
     console.log(`   Status: ${order.status}`);
-    console.log(`   Ausgeführte Menge: ${order.executedQty}`);
+    console.log(`   Ausgeführte Menge: ${executedQty}`);
     console.log(`   Durchschnittspreis: ${avgPrice.toFixed(6)} USDT`);
     console.log('═══════════════════════════════════════════════');
     console.log('');
@@ -847,35 +941,70 @@ async function executeTrade(signal, strategy) {
     // Position tracking
     const positionKey = `${strategy.id}_${symbol}`;
     if (side === 'BUY') {
+      // Prüfe ob bereits eine Position existiert (sollte nicht passieren, aber sicherheitshalber)
+      if (openPositions.has(positionKey)) {
+        console.warn(`⚠️  Position ${positionKey} existiert bereits - überschreibe mit neuer Position`);
+        await logBotEvent('warning', `Position überschrieben bei BUY`, {
+          positionKey: positionKey,
+          symbol: symbol,
+          strategy_id: strategy.id
+        });
+      }
+      
       openPositions.set(positionKey, {
         symbol: symbol,
         entryPrice: avgPrice, // Verwende tatsächlichen Durchschnittspreis statt signal.price
         quantity: quantity,
         orderId: order.orderId,
-        timestamp: new Date()
+        timestamp: new Date(),
+        strategyId: strategy.id // WICHTIG: Strategie-ID speichern für Validierung
       });
       console.log(`📊 Position geöffnet: ${positionKey} @ ${avgPrice.toFixed(6)} USDT`);
+      console.log(`   Menge: ${quantity.toFixed(2)}`);
+      console.log(`   Strategie: ${strategy.name} (ID: ${strategy.id})`);
       await logBotEvent('info', `Position geöffnet: ${symbol}`, {
         positionKey: positionKey,
         entryPrice: avgPrice,
         quantity: quantity,
         orderId: order.orderId.toString(),
-        strategy_id: strategy.id
+        strategy_id: strategy.id,
+        strategy_name: strategy.name
       });
     } else {
       // Bei SELL: Position wurde bereits in canTrade() gelöscht (Race-Condition-Schutz)
       // Verwende die Position-Daten aus dem Signal
       const closedPosition = signal._positionData;
       if (closedPosition) {
+        // Zusätzliche Validierung: Stelle sicher, dass die Position wirklich geschlossen wurde
+        if (openPositions.has(positionKey)) {
+          console.error(`❌ KRITISCHER FEHLER: Position ${positionKey} existiert noch nach SELL!`);
+          await logBotEvent('error', `Position existiert noch nach SELL`, {
+            positionKey: positionKey,
+            symbol: symbol,
+            strategy_id: strategy.id
+          });
+          // Entferne die Position jetzt (sollte nicht passieren)
+          openPositions.delete(positionKey);
+        }
+        
         console.log(`📊 Position geschlossen: ${positionKey} (Entry: ${closedPosition.entryPrice.toFixed(6)} USDT, Exit: ${avgPrice.toFixed(6)} USDT)`);
+        console.log(`   Menge: ${executedQty.toFixed(2)}`);
+        console.log(`   Strategie: ${strategy.name} (ID: ${strategy.id})`);
         await logBotEvent('info', `Position geschlossen: ${symbol}`, {
           positionKey: positionKey,
           entryPrice: closedPosition.entryPrice,
           exitPrice: avgPrice,
-          strategy_id: strategy.id
+          quantity: executedQty,
+          strategy_id: strategy.id,
+          strategy_name: strategy.name
         });
       } else {
-        console.log(`⚠️  Position ${positionKey} wurde bereits geschlossen oder existiert nicht`);
+        console.error(`❌ KRITISCHER FEHLER: Keine Position-Daten für SELL gefunden: ${positionKey}`);
+        await logBotEvent('error', `Keine Position-Daten für SELL`, {
+          positionKey: positionKey,
+          symbol: symbol,
+          strategy_id: strategy.id
+        });
       }
     }
 
