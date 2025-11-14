@@ -441,92 +441,6 @@ app.get('/api/performance', async (req, res) => {
   }
 });
 
-/**
- * GET /api/market/prices - Aktuelle Marktpreise abrufen
- */
-app.get('/api/market/prices', async (req, res) => {
-  try {
-    const { symbols } = req.query;
-    const symbolList = symbols ? symbols.split(',') : [];
-    
-    const prices = {};
-    
-    // Preise aus dem priceHistories Map holen
-    for (const symbol of symbolList) {
-      const history = priceHistories.get(symbol);
-      if (history && history.length > 0) {
-        prices[symbol] = history[history.length - 1];
-      }
-    }
-
-    res.json({
-      success: true,
-      prices: prices
-    });
-  } catch (error) {
-    console.error('Fehler beim Abrufen der Marktpreise:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Interner Serverfehler'
-    });
-  }
-});
-
-// ═══════════════════════════════════════════════
-// WEBSOCKET SETUP
-// ═══════════════════════════════════════════════
-
-const wss = new WebSocket.Server({ noServer: true });
-
-// WebSocket Clients verwalten
-const wsClients = new Set();
-
-// WebSocket Message an alle Clients senden
-function broadcastToClients(message) {
-  const data = JSON.stringify(message);
-  wsClients.forEach(client => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(data);
-    }
-  });
-}
-
-wss.on('connection', (ws) => {
-  console.log('Neuer WebSocket Client verbunden');
-  wsClients.add(ws);
-  
-  // Sende initialen Status
-  ws.send(JSON.stringify({
-    type: 'status',
-    data: {
-      status: botStatus,
-      timestamp: new Date().toISOString(),
-      tradingBotProcessCount: tradingBotProcess.size,
-      activeStrategies: activeStrategies.length
-    }
-  }));
-
-  ws.on('close', () => {
-    console.log('WebSocket Client getrennt');
-    wsClients.delete(ws);
-  });
-
-  ws.on('error', (error) => {
-    console.error('WebSocket Fehler:', error);
-    wsClients.delete(ws);
-  });
-
-  ws.on('message', (message) => {
-    try {
-      const data = JSON.parse(message);
-      // Hier können wir auf Client-Messages reagieren, wenn nötig
-      console.log('WebSocket Message erhalten:', data);
-    } catch (error) {
-      console.error('Fehler beim Parsen der WebSocket-Nachricht:', error);
-    }
-  });
-});
-
 // ═══════════════════════════════════════════════
 // UTILITY FUNCTIONS
 // ═══════════════════════════════════════════════
@@ -2655,13 +2569,11 @@ function stopTradingBot() {
 const PORT = process.env.PORT || 10000;
 const HOST = '0.0.0.0';  // Wichtig für Render-Deployment
 
-// HTTP Server erstellen
-const server = app.listen(PORT, HOST, () => {
+app.listen(PORT, HOST, () => {
   console.log('═══════════════════════════════════════════════');
   console.log('🤖 Krypto-Trading-Bot Backend');
   console.log('═══════════════════════════════════════════════');
   console.log(`🌐 Server läuft auf: http://${HOST}:${PORT}`);
-  console.log(`🔌 WebSocket URL: ws://${HOST}:${PORT}/ws`);
   console.log(`📊 Supabase-URL: ${supabaseUrl}`);
   console.log(`🔑 Supabase-Key: ${supabaseKey ? '✅ gesetzt' : '❌ FEHLT'}`);
   console.log(`📍 Bot-Status: ${botStatus}`);
@@ -2672,12 +2584,6 @@ const server = app.listen(PORT, HOST, () => {
   console.log(`  POST /api/stop-bot            - Bot stoppen`);
   console.log(`  POST /api/backtest            - Backtesting durchführen`);
   console.log(`  GET  /api/strategy-performance - Strategie-Performance abfragen`);
-  console.log(`  GET  /api/strategies          - Alle Strategien abrufen`);
-  console.log(`  PUT  /api/strategies/:id      - Strategie aktualisieren`);
-  console.log(`  GET  /api/trades              - Trades abrufen`);
-  console.log(`  GET  /api/positions           - Offene Positionen`);
-  console.log(`  GET  /api/performance         - Performance-Metriken`);
-  console.log(`  GET  /api/market/prices       - Marktpreise abrufen`);
   console.log('═══════════════════════════════════════════════');
   
   // AUTOMATISCHER BOT-START BEIM SERVER-START
@@ -2708,16 +2614,5 @@ const server = app.listen(PORT, HOST, () => {
       await loadBotSettings(true);
     }, 5 * 60 * 1000);
   }, 60000); // Starte nach 1 Minute
-});
-
-// WebSocket upgrade handling
-server.on('upgrade', (request, socket, head) => {
-  if (request.url === '/ws') {
-    wss.handleUpgrade(request, socket, head, (ws) => {
-      wss.emit('connection', ws, request);
-    });
-  } else {
-    socket.destroy();
-  }
 });
 
