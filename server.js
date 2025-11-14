@@ -332,27 +332,141 @@ app.get('/api/trades', async (req, res) => {
 
 /**
  * Gibt offene Positionen zurück
+ * WICHTIG: Berechnet Positionen aus der Datenbank (BUY ohne entsprechenden SELL)
+ * Nicht nur aus der in-memory Map, sondern immer aktuell aus der DB
  */
 app.get('/api/positions', async (req, res) => {
   try {
-    // Konvertiere Map zu Array für API Response
-    const positionsArray = Array.from(openPositions.values()).map(position => ({
-      id: position.id,
-      symbol: position.symbol,
-      quantity: position.quantity,
-      entryPrice: position.entryPrice,
-      currentPrice: position.currentPrice || position.entryPrice,
-      pnl: position.pnl || 0,
-      pnlPercent: position.entryPrice > 0 
-        ? ((position.currentPrice - position.entryPrice) / position.entryPrice) * 100 
-        : 0,
-      createdAt: position.createdAt,
-      duration: formatDuration(position.createdAt)
-    }));
-
+    // Lade ALLE Strategien (nicht nur aktive), um alle offenen Positionen zu finden
+    const { data: allStrategies, error: strategiesError } = await supabase
+      .from('strategies')
+      .select('id, symbol, name');
+    
+    if (strategiesError) {
+      console.error('Fehler beim Laden der Strategien:', strategiesError);
+      throw strategiesError;
+    }
+    
+    const allPositions = [];
+    
+    // Für jede Strategie prüfen, ob es offene Positionen gibt
+    for (const strategy of (allStrategies || [])) {
+      const symbol = strategy.symbol;
+      
+      // Lade alle BUY-Trades chronologisch sortiert
+      const { data: buyTrades, error: buyError } = await supabase
+        .from('trades')
+        .select('*')
+        .eq('strategy_id', strategy.id)
+        .eq('symbol', symbol)
+        .eq('side', 'buy')
+        .eq('status', 'executed')
+        .order('executed_at', { ascending: true });
+      
+      if (buyError) {
+        console.error(`❌ Fehler beim Laden der BUY-Trades für ${symbol}:`, buyError);
+        continue;
+      }
+      
+      // Lade alle SELL-Trades chronologisch sortiert
+      const { data: sellTrades, error: sellError } = await supabase
+        .from('trades')
+        .select('*')
+        .eq('strategy_id', strategy.id)
+        .eq('symbol', symbol)
+        .eq('side', 'sell')
+        .eq('status', 'executed')
+        .order('executed_at', { ascending: true });
+      
+      if (sellError) {
+        console.error(`❌ Fehler beim Laden der SELL-Trades für ${symbol}:`, sellError);
+        continue;
+      }
+      
+      // FIFO-Logik: Paare BUY- und SELL-Trades
+      const openBuyTrades = [];
+      let sellIndex = 0;
+      
+      if (buyTrades) {
+        for (const buyTrade of buyTrades) {
+          let remainingQuantity = parseFloat(buyTrade.quantity);
+          
+          // Versuche, diese BUY-Position mit SELL-Trades zu schließen
+          while (remainingQuantity > 0 && sellTrades && sellIndex < sellTrades.length) {
+            const sellTrade = sellTrades[sellIndex];
+            const sellQuantity = parseFloat(sellTrade.quantity);
+            
+            if (sellQuantity >= remainingQuantity) {
+              // Dieser SELL schließt die gesamte BUY-Position
+              remainingQuantity = 0;
+              sellIndex++;
+            } else {
+              // Dieser SELL schließt nur einen Teil der BUY-Position
+              remainingQuantity -= sellQuantity;
+              sellIndex++;
+            }
+          }
+          
+          // Wenn noch etwas übrig ist, ist die Position offen
+          if (remainingQuantity > 0) {
+            openBuyTrades.push({
+              ...buyTrade,
+              remainingQuantity: remainingQuantity
+            });
+          }
+        }
+      }
+      
+      // Wenn es offene Positionen gibt, berechne gewichteten Durchschnittspreis
+      if (openBuyTrades.length > 0) {
+        let totalValue = 0;
+        let totalQuantity = 0;
+        
+        for (const trade of openBuyTrades) {
+          const qty = trade.remainingQuantity || parseFloat(trade.quantity);
+          const price = parseFloat(trade.price);
+          totalValue += qty * price;
+          totalQuantity += qty;
+        }
+        
+        if (totalQuantity > 0) {
+          const weightedAveragePrice = totalValue / totalQuantity;
+          
+          // Hole aktuellen Preis von Binance (falls verfügbar)
+          let currentPrice = weightedAveragePrice; // Fallback
+          try {
+            if (binanceClient) {
+              const ticker = await binanceClient.prices({ symbol: symbol });
+              currentPrice = parseFloat(ticker[symbol]) || weightedAveragePrice;
+            }
+          } catch (error) {
+            console.warn(`⚠️  Konnte aktuellen Preis für ${symbol} nicht laden:`, error.message);
+          }
+          
+          const pnl = (currentPrice - weightedAveragePrice) * totalQuantity;
+          const pnlPercent = weightedAveragePrice > 0 
+            ? ((currentPrice - weightedAveragePrice) / weightedAveragePrice) * 100 
+            : 0;
+          
+          allPositions.push({
+            id: `${strategy.id}_${symbol}`,
+            symbol: symbol,
+            quantity: totalQuantity,
+            entryPrice: weightedAveragePrice,
+            currentPrice: currentPrice,
+            pnl: pnl,
+            pnlPercent: pnlPercent,
+            strategyId: strategy.id,
+            strategyName: strategy.name,
+            createdAt: openBuyTrades[0].executed_at || openBuyTrades[0].created_at
+          });
+        }
+      }
+    }
+    
     res.json({ 
       success: true, 
-      positions: positionsArray 
+      positions: allPositions 
     });
   } catch (error) {
     console.error('Fehler beim Laden der Positionen:', error);
