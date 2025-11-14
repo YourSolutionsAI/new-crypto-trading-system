@@ -60,6 +60,7 @@ let activeStrategies = [];
 let priceHistory = [];
 let lastSignalTime = 0;
 let lastTradeTime = 0;
+let isTradeInProgress = false; // Lock-Mechanismus: Verhindert gleichzeitige Trade-Ausführungen
 let openPositions = new Map(); // Tracking offener Positionen
 let currentSymbol = null; // Wird aus Supabase geladen
 let botSettings = {}; // Bot-Einstellungen aus Supabase
@@ -599,6 +600,13 @@ async function canTrade(signal, strategy) {
     return { allowed: false, reason: reason };
   }
 
+  // KRITISCH: Lock-Mechanismus - Verhindert gleichzeitige Trade-Ausführungen
+  if (isTradeInProgress) {
+    const reason = 'Trade-Ausführung läuft bereits - Warte auf Abschluss';
+    console.log(`🔒 ${reason}`);
+    return { allowed: false, reason: reason };
+  }
+
   // Trade Cooldown prüfen
   const now = Date.now();
   const tradeCooldown = botSettings.trade_cooldown_ms || 300000;
@@ -620,6 +628,21 @@ async function canTrade(signal, strategy) {
     const reason = `Maximum gleichzeitiger Trades erreicht (${maxConcurrentTrades})`;
     console.log(`⚠️  ${reason}`);
     return { allowed: false, reason: reason };
+  }
+
+  // Bei BUY: Prüfen ob bereits eine offene Position existiert (verhindert mehrfache Käufe)
+  if (signal.action === 'buy') {
+    const positionKey = `${strategy.id}_${currentSymbol}`;
+    if (openPositions.has(positionKey)) {
+      const reason = `Bereits eine offene Position vorhanden: ${positionKey} - Kein weiterer Kauf möglich`;
+      console.log(`⚠️  ${reason}`);
+      await logBotEvent('warning', `BUY-Signal ignoriert: Bereits offene Position`, {
+        positionKey: positionKey,
+        symbol: currentSymbol,
+        strategy_id: strategy.id
+      });
+      return { allowed: false, reason: reason };
+    }
   }
 
   // Bei SELL: Prüfen ob offene Position existiert
@@ -655,14 +678,30 @@ async function canTrade(signal, strategy) {
  * Führt einen Trade auf Binance Testnet aus
  */
 async function executeTrade(signal, strategy) {
+  // KRITISCH: Lock setzen BEVOR irgendwelche Checks gemacht werden
+  // Dies verhindert, dass mehrere Trades gleichzeitig ausgeführt werden
+  if (isTradeInProgress) {
+    console.log(`🔒 Trade-Ausführung läuft bereits - Signal wird ignoriert: ${signal.action.toUpperCase()}`);
+    return null;
+  }
+
+  // Lock aktivieren
+  isTradeInProgress = true;
+
   try {
-    // Trading-Checks
+    // Trading-Checks (Lock wird hier nicht mehr geprüft, da wir es bereits oben gemacht haben)
     const tradeCheck = await canTrade(signal, strategy);
     if (!tradeCheck.allowed) {
+      // Lock wieder freigeben, wenn Trade nicht ausgeführt wird
+      isTradeInProgress = false;
       // Logge warum Trade nicht ausgeführt wird
       console.log(`⚠️  Trade nicht ausgeführt: ${tradeCheck.reason}`);
       return null;
     }
+
+    // KRITISCH: Cooldown SOFORT setzen, NACHDEM alle Checks bestanden wurden
+    // Dies verhindert, dass mehrere Signale gleichzeitig die Cooldown-Prüfung bestehen
+    lastTradeTime = Date.now();
 
     console.log('');
     console.log('═══════════════════════════════════════════════');
@@ -687,11 +726,16 @@ async function executeTrade(signal, strategy) {
       quantity: quantity.toString()
     });
 
+    // Durchschnittspreis berechnen
+    const avgPrice = order.fills && order.fills.length > 0
+      ? order.fills.reduce((sum, fill) => sum + parseFloat(fill.price), 0) / order.fills.length
+      : parseFloat(signal.price);
+
     console.log(`✅ Order ausgeführt!`);
     console.log(`   Order ID: ${order.orderId}`);
     console.log(`   Status: ${order.status}`);
     console.log(`   Ausgeführte Menge: ${order.executedQty}`);
-    console.log(`   Durchschnittspreis: ${order.fills?.[0]?.price || 'N/A'}`);
+    console.log(`   Durchschnittspreis: ${avgPrice.toFixed(6)} USDT`);
     console.log('═══════════════════════════════════════════════');
     console.log('');
 
@@ -700,15 +744,15 @@ async function executeTrade(signal, strategy) {
     if (side === 'BUY') {
       openPositions.set(positionKey, {
         symbol: symbol,
-        entryPrice: signal.price,
+        entryPrice: avgPrice, // Verwende tatsächlichen Durchschnittspreis statt signal.price
         quantity: quantity,
         orderId: order.orderId,
         timestamp: new Date()
       });
-      console.log(`📊 Position geöffnet: ${positionKey} @ ${signal.price} USDT`);
+      console.log(`📊 Position geöffnet: ${positionKey} @ ${avgPrice.toFixed(6)} USDT`);
       await logBotEvent('info', `Position geöffnet: ${symbol}`, {
         positionKey: positionKey,
-        entryPrice: signal.price,
+        entryPrice: avgPrice,
         quantity: quantity,
         orderId: order.orderId.toString(),
         strategy_id: strategy.id
@@ -718,7 +762,7 @@ async function executeTrade(signal, strategy) {
       // Verwende die Position-Daten aus dem Signal
       const closedPosition = signal._positionData;
       if (closedPosition) {
-        console.log(`📊 Position geschlossen: ${positionKey} (Entry: ${closedPosition.entryPrice} USDT, Exit: ${avgPrice} USDT)`);
+        console.log(`📊 Position geschlossen: ${positionKey} (Entry: ${closedPosition.entryPrice.toFixed(6)} USDT, Exit: ${avgPrice.toFixed(6)} USDT)`);
         await logBotEvent('info', `Position geschlossen: ${symbol}`, {
           positionKey: positionKey,
           entryPrice: closedPosition.entryPrice,
@@ -733,12 +777,14 @@ async function executeTrade(signal, strategy) {
     // Trade in Datenbank speichern
     await saveTradeToDatabase(order, signal, strategy);
 
-    // Cooldown setzen
-    lastTradeTime = Date.now();
+    // Cooldown wurde bereits oben gesetzt - hier nur Lock freigeben
+    isTradeInProgress = false;
 
     return order;
 
   } catch (error) {
+    // WICHTIG: Lock IMMER freigeben, auch bei Fehlern!
+    isTradeInProgress = false;
     console.error('');
     console.error('═══════════════════════════════════════════════');
     console.error('❌ ORDER FEHLGESCHLAGEN');
@@ -1233,6 +1279,8 @@ function stopTradingBot() {
   activeStrategies = [];
   priceHistory = [];
   lastSignalTime = 0;
+  lastTradeTime = 0;
+  isTradeInProgress = false; // Lock zurücksetzen
   
   console.log('✅ Trading-Bot wurde erfolgreich gestoppt');
 }
