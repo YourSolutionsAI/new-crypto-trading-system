@@ -3,8 +3,16 @@
  * TRADING BOT KONFIGURATION
  * ═══════════════════════════════════════════════
  * 
- * Diese Datei enthält alle wichtigen Konfigurationseinstellungen.
- * Ändern Sie diese Werte nach Bedarf und starten Sie den Bot neu.
+ * ⚠️ WICHTIG: Diese Datei dient nur als FALLBACK/DOKUMENTATION!
+ * 
+ * Alle Einstellungen werden primär aus SUPABASE geladen.
+ * Diese config.js wird nur verwendet, wenn ein Wert in Supabase fehlt.
+ * 
+ * Ändern Sie Einstellungen in Supabase:
+ * - Table: bot_settings
+ * - Table: strategies
+ * 
+ * Siehe: GUIDES & CONFIG/GUIDES/SUPABASE_CONFIGURATION.md
  */
 
 module.exports = {

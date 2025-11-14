@@ -62,7 +62,9 @@ let priceHistory = [];
 let lastSignalTime = 0;
 let lastTradeTime = 0;
 let openPositions = new Map(); // Tracking offener Positionen
-let currentSymbol = config.market.symbol; // Aktuelles Trading-Paar
+let currentSymbol = null; // Wird aus Supabase geladen
+let botSettings = {}; // Bot-Einstellungen aus Supabase
+let lotSizes = {}; // Lot Size Regeln aus Supabase
 
 // API-Routen
 
@@ -124,6 +126,46 @@ app.post('/api/stop-bot', (req, res) => {
 // ═══════════════════════════════════════════════
 // TRADING-LOGIK FUNKTIONEN
 // ═══════════════════════════════════════════════
+
+/**
+ * Lädt Bot-Einstellungen von Supabase
+ */
+async function loadBotSettings() {
+  try {
+    console.log('⚙️  Lade Bot-Einstellungen von Supabase...');
+    
+    const { data: settings, error } = await supabase
+      .from('bot_settings')
+      .select('*');
+
+    if (error) {
+      console.error('❌ Fehler beim Laden der Einstellungen:', error);
+      return;
+    }
+
+    // Einstellungen in Objekt umwandeln
+    settings.forEach(setting => {
+      const key = setting.key;
+      const value = setting.value;
+
+      // Lot Sizes extrahieren
+      if (key.startsWith('lot_size_')) {
+        const symbol = key.replace('lot_size_', '');
+        lotSizes[symbol] = value;
+      } 
+      // Normale Settings
+      else {
+        botSettings[key] = value;
+      }
+    });
+
+    console.log(`✅ ${Object.keys(botSettings).length} Bot-Einstellungen geladen`);
+    console.log(`✅ ${Object.keys(lotSizes).length} Lot Size Konfigurationen geladen`);
+
+  } catch (error) {
+    console.error('❌ Fehler beim Laden der Einstellungen:', error);
+  }
+}
 
 /**
  * Lädt aktive Trading-Strategien von Supabase
@@ -200,8 +242,11 @@ function generateSignal(currentPrice, strategy) {
   const difference = maShort - maLong;
   const differencePercent = (difference / maLong) * 100;
 
+  // Threshold aus Supabase oder Fallback
+  const threshold = botSettings.signal_threshold_percent || 0.01;
+
   // Kauf-Signal: Kurzer MA über langem MA (Bullish)
-  if (differencePercent > 0.01) { // 0.01% Threshold (sensitiver für Tests)
+  if (differencePercent > threshold) {
     return {
       action: 'buy',
       price: currentPrice,
@@ -215,7 +260,7 @@ function generateSignal(currentPrice, strategy) {
   }
 
   // Verkauf-Signal: Kurzer MA unter langem MA (Bearish)
-  if (differencePercent < -0.01) { // -0.01% Threshold (sensitiver für Tests)
+  if (differencePercent < -threshold) {
     return {
       action: 'sell',
       price: currentPrice,
@@ -301,14 +346,17 @@ async function logSignal(signal, strategy) {
 /**
  * Berechnet die Kaufmenge basierend auf Risk Management & Binance Lot Size
  */
-function calculateQuantity(price, symbol) {
-  const maxTradeSize = config.trading.defaultTradeSize;
+function calculateQuantity(price, symbol, strategy) {
+  // Trade-Größe aus Strategie oder Bot-Settings oder Fallback
+  const maxTradeSize = strategy.config.risk?.max_trade_size_usdt 
+    || botSettings.default_trade_size_usdt 
+    || 100;
   
   // Berechne Basis-Menge
   let quantity = maxTradeSize / price;
   
-  // Hole Lot Size Regeln für das Symbol
-  const lotSize = config.lotSizes[symbol] || config.lotSizes.DEFAULT;
+  // Hole Lot Size Regeln aus Supabase oder Fallback aus config.js
+  const lotSize = lotSizes[symbol] || config.lotSizes[symbol] || config.lotSizes.DEFAULT;
   
   // Runde auf Step Size
   quantity = Math.floor(quantity / lotSize.stepSize) * lotSize.stepSize;
@@ -350,7 +398,8 @@ function canTrade(signal, strategy) {
 
   // Trade Cooldown prüfen
   const now = Date.now();
-  const cooldownRemaining = config.trading.tradeCooldown - (now - lastTradeTime);
+  const tradeCooldown = botSettings.trade_cooldown_ms || 300000;
+  const cooldownRemaining = tradeCooldown - (now - lastTradeTime);
   
   if (cooldownRemaining > 0) {
     const waitTime = Math.round(cooldownRemaining / 1000);
@@ -359,7 +408,9 @@ function canTrade(signal, strategy) {
   }
 
   // Maximale gleichzeitige Trades prüfen
-  const maxConcurrentTrades = config.trading.maxConcurrentTrades;
+  const maxConcurrentTrades = strategy.config.risk?.max_concurrent_trades 
+    || botSettings.max_concurrent_trades 
+    || 3;
   if (openPositions.size >= maxConcurrentTrades) {
     console.log(`⚠️  Maximum gleichzeitiger Trades erreicht (${maxConcurrentTrades})`);
     return false;
@@ -392,9 +443,9 @@ async function executeTrade(signal, strategy) {
     console.log(`🔄 FÜHRE ${signal.action.toUpperCase()}-ORDER AUS`);
     console.log('═══════════════════════════════════════════════');
 
-    const symbol = currentSymbol; // Verwende das aktuelle Symbol (aus WebSocket)
+    const symbol = currentSymbol; // Verwende das aktuelle Symbol (aus Strategie)
     const side = signal.action === 'buy' ? 'BUY' : 'SELL';
-    const quantity = calculateQuantity(signal.price, symbol);
+    const quantity = calculateQuantity(signal.price, symbol, strategy);
 
     console.log(`📊 Symbol: ${symbol}`);
     console.log(`📈 Seite: ${side}`);
@@ -577,21 +628,33 @@ async function startTradingBot() {
   console.log('🚀 Trading-Bot wird gestartet...');
   botStatus = 'startet...';
 
+  // Bot-Einstellungen von Supabase laden
+  await loadBotSettings();
+
   // Strategien von Supabase laden
   activeStrategies = await loadStrategies();
   
   if (activeStrategies.length === 0) {
     console.log('⚠️  Bot startet im Beobachtungsmodus (keine aktiven Strategien)');
+    botStatus = 'gestoppt (keine Strategien)';
+    return;
   }
+
+  // Symbol aus erster aktiver Strategie
+  currentSymbol = activeStrategies[0].symbol;
+  
+  // WebSocket URL aus Supabase oder Fallback
+  const wsKey = `websocket_${currentSymbol}`;
+  const binanceWsUrl = botSettings[wsKey] 
+    ? botSettings[wsKey].replace(/"/g, '') // Entferne Anführungszeichen
+    : `wss://stream.binance.com:9443/ws/${currentSymbol.toLowerCase()}@trade`;
+  
+  console.log(`📊 Aktives Symbol: ${currentSymbol}`);
+  console.log(`🔌 Stelle Verbindung zu Binance her: ${binanceWsUrl}`);
 
   // Preishistorie zurücksetzen
   priceHistory = [];
   lastSignalTime = 0;
-
-  // WebSocket-Verbindung zu Binance herstellen
-  const binanceWsUrl = config.market.websocketUrl;
-  currentSymbol = config.market.symbol; // Setze aktuelles Symbol
-  console.log(`🔌 Stelle Verbindung zu Binance her: ${binanceWsUrl}`);
 
   const ws = new WebSocket(binanceWsUrl);
   tradingBotProcess = ws;
@@ -612,7 +675,8 @@ async function startTradingBot() {
         const quantity = parseFloat(message.q);
 
         // Preis anzeigen (alle X Preise nur einen anzeigen, um Spam zu vermeiden)
-        if (priceHistory.length % config.signals.priceLogInterval === 0) {
+        const priceLogInterval = botSettings.logging_price_log_interval || 10;
+        if (priceHistory.length % priceLogInterval === 0) {
           const priceDecimals = currentPrice < 1 ? 6 : 2;
           console.log(`💰 ${currentSymbol}: ${currentPrice.toFixed(priceDecimals)} USDT | Vol: ${quantity.toFixed(2)}`);
         }
@@ -629,7 +693,8 @@ async function startTradingBot() {
 
             // Fortschritt anzeigen während Datensammlung
             if (signal.action === 'wait') {
-              if (priceHistory.length % 20 === 0) {
+              const showProgress = botSettings.logging_show_data_progress !== false;
+              if (showProgress && priceHistory.length % 20 === 0) {
                 console.log(`📊 ${signal.reason} (${signal.progress}%)`);
               }
               continue;
@@ -639,10 +704,12 @@ async function startTradingBot() {
             if (signal.action === 'buy' || signal.action === 'sell') {
               // Cooldown prüfen (nicht zu häufig signalisieren)
               const now = Date.now();
-              const signalCooldownRemaining = config.signals.signalCooldown - (now - lastSignalTime);
+              const signalCooldown = botSettings.signal_cooldown_ms || 60000;
+              const signalCooldownRemaining = signalCooldown - (now - lastSignalTime);
               
               if (signalCooldownRemaining > 0) {
-                if (config.logging.verbose) {
+                const verbose = botSettings.logging_verbose === true;
+                if (verbose) {
                   console.log(`⏳ Signal Cooldown: ${Math.round(signalCooldownRemaining / 1000)}s`);
                 }
                 continue;
@@ -676,8 +743,12 @@ async function startTradingBot() {
               }
             } 
             // Hold-Signal (nur gelegentlich anzeigen)
-            else if (signal.action === 'hold' && config.logging.showHoldSignals && priceHistory.length % config.signals.holdLogInterval === 0) {
-              console.log(`📊 Hold - MA${strategy.config.indicators.ma_short}: ${signal.maShort} | MA${strategy.config.indicators.ma_long}: ${signal.maLong} | Diff: ${signal.differencePercent}%`);
+            else if (signal.action === 'hold') {
+              const showHold = botSettings.logging_show_hold_signals !== false;
+              const holdInterval = botSettings.logging_hold_log_interval || 50;
+              if (showHold && priceHistory.length % holdInterval === 0) {
+                console.log(`📊 Hold - MA${strategy.config.indicators.ma_short}: ${signal.maShort} | MA${strategy.config.indicators.ma_long}: ${signal.maLong} | Diff: ${signal.differencePercent}%`);
+              }
             }
           }
         }
