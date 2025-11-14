@@ -64,6 +64,7 @@ let openPositions = new Map(); // Tracking offener Positionen
 let currentSymbol = null; // Wird aus Supabase geladen
 let botSettings = {}; // Bot-Einstellungen aus Supabase
 let lotSizes = {}; // Lot Size Regeln aus Supabase
+let settingsReloadInterval = null; // Interval für automatisches Neuladen der Einstellungen
 
 // API-Routen
 
@@ -128,10 +129,13 @@ app.post('/api/stop-bot', (req, res) => {
 
 /**
  * Lädt Bot-Einstellungen von Supabase
+ * @param {boolean} silent - Wenn true, werden weniger Logs ausgegeben (für Auto-Reload)
  */
-async function loadBotSettings() {
+async function loadBotSettings(silent = false) {
   try {
-    console.log('⚙️  Lade Bot-Einstellungen von Supabase...');
+    if (!silent) {
+      console.log('⚙️  Lade Bot-Einstellungen von Supabase...');
+    }
     
     const { data: settings, error } = await supabase
       .from('bot_settings')
@@ -139,8 +143,17 @@ async function loadBotSettings() {
 
     if (error) {
       console.error('❌ Fehler beim Laden der Einstellungen:', error);
-      return;
+      return false;
     }
+
+    // Alte Werte für Vergleich (wichtig für Auto-Reload)
+    const oldSettingsCount = Object.keys(botSettings).length;
+    const oldLotSizesCount = Object.keys(lotSizes).length;
+    const oldThreshold = botSettings.signal_threshold_percent;
+
+    // Einstellungen zurücksetzen
+    botSettings = {};
+    lotSizes = {};
 
     // Einstellungen in Objekt umwandeln
     settings.forEach(setting => {
@@ -158,11 +171,99 @@ async function loadBotSettings() {
       }
     });
 
-    console.log(`✅ ${Object.keys(botSettings).length} Bot-Einstellungen geladen`);
-    console.log(`✅ ${Object.keys(lotSizes).length} Lot Size Konfigurationen geladen`);
+    const newSettingsCount = Object.keys(botSettings).length;
+    const newLotSizesCount = Object.keys(lotSizes).length;
+
+    if (silent) {
+      // Bei Auto-Reload: Loggen wenn sich etwas geändert hat
+      const thresholdChanged = oldThreshold !== botSettings.signal_threshold_percent;
+      const countChanged = oldSettingsCount !== newSettingsCount || oldLotSizesCount !== newLotSizesCount;
+      
+      if (thresholdChanged || countChanged) {
+        console.log(`🔄 Einstellungen aktualisiert: ${newSettingsCount} Bot-Einstellungen, ${newLotSizesCount} Lot Sizes`);
+        if (thresholdChanged) {
+          console.log(`   📊 signal_threshold_percent geändert: ${oldThreshold || 'N/A'} → ${botSettings.signal_threshold_percent || 'N/A'}`);
+        }
+      }
+    } else {
+      console.log(`✅ ${newSettingsCount} Bot-Einstellungen geladen`);
+      console.log(`✅ ${newLotSizesCount} Lot Size Konfigurationen geladen`);
+    }
+
+    return true;
 
   } catch (error) {
     console.error('❌ Fehler beim Laden der Einstellungen:', error);
+    return false;
+  }
+}
+
+/**
+ * Lädt offene Positionen aus der Datenbank (BUY ohne entsprechenden SELL)
+ */
+async function loadOpenPositions() {
+  try {
+    console.log('📊 Lade offene Positionen aus der Datenbank...');
+    
+    // Für jede aktive Strategie prüfen, ob es offene Positionen gibt
+    for (const strategy of activeStrategies) {
+      const symbol = strategy.symbol;
+      
+      // Zähle BUY-Trades ohne entsprechenden SELL
+      const { data: buyTrades, error: buyError } = await supabase
+        .from('trades')
+        .select('*')
+        .eq('strategy_id', strategy.id)
+        .eq('symbol', symbol)
+        .eq('side', 'buy')
+        .eq('status', 'executed')
+        .order('executed_at', { ascending: false });
+      
+      if (buyError) {
+        console.error(`❌ Fehler beim Laden der BUY-Trades für ${symbol}:`, buyError);
+        continue;
+      }
+      
+      const { data: sellTrades, error: sellError } = await supabase
+        .from('trades')
+        .select('*')
+        .eq('strategy_id', strategy.id)
+        .eq('symbol', symbol)
+        .eq('side', 'sell')
+        .eq('status', 'executed')
+        .order('executed_at', { ascending: false });
+      
+      if (sellError) {
+        console.error(`❌ Fehler beim Laden der SELL-Trades für ${symbol}:`, sellError);
+        continue;
+      }
+      
+      // Zähle offene Positionen: BUY ohne entsprechenden SELL
+      let buyCount = buyTrades ? buyTrades.length : 0;
+      let sellCount = sellTrades ? sellTrades.length : 0;
+      const openCount = buyCount - sellCount;
+      
+      if (openCount > 0) {
+        // Nehm den letzten BUY-Trade als offene Position
+        const lastBuyTrade = buyTrades[0];
+        const positionKey = `${strategy.id}_${symbol}`;
+        
+        openPositions.set(positionKey, {
+          symbol: symbol,
+          entryPrice: parseFloat(lastBuyTrade.price),
+          quantity: parseFloat(lastBuyTrade.quantity),
+          orderId: lastBuyTrade.order_id,
+          timestamp: new Date(lastBuyTrade.executed_at)
+        });
+        
+        console.log(`✅ Offene Position geladen: ${symbol} @ ${lastBuyTrade.price} USDT (${lastBuyTrade.quantity} Stück)`);
+      }
+    }
+    
+    console.log(`✅ ${openPositions.size} offene Position(en) geladen`);
+    
+  } catch (error) {
+    console.error('❌ Fehler beim Laden der offenen Positionen:', error);
   }
 }
 
@@ -310,32 +411,60 @@ async function logSignal(signal, strategy) {
       return;
     }
 
+    const logData = {
+      level: 'info',
+      message: `Trading Signal: ${signal.action.toUpperCase()}`,
+      strategy_id: strategy.id,
+      data: {
+        action: signal.action,
+        price: signal.price,
+        reason: signal.reason,
+        maShort: signal.maShort,
+        maLong: signal.maLong,
+        difference: signal.difference,
+        differencePercent: signal.differencePercent,
+        confidence: signal.confidence,
+        symbol: strategy.symbol,
+        timestamp: new Date().toISOString()
+      }
+    };
+
     const { error } = await supabase
       .from('bot_logs')
-      .insert({
-        level: 'info',
-        message: `Trading Signal: ${signal.action.toUpperCase()}`,
-        strategy_id: strategy.id,
-        data: {
-          action: signal.action,
-          price: signal.price,
-          reason: signal.reason,
-          maShort: signal.maShort,
-          maLong: signal.maLong,
-          difference: signal.difference,
-          differencePercent: signal.differencePercent,
-          confidence: signal.confidence,
-          symbol: strategy.symbol
-        }
-      });
+      .insert(logData);
 
     if (error) {
       console.error('❌ Fehler beim Loggen in Supabase:', error.message);
     } else {
-      console.log('✅ Signal in Datenbank gespeichert');
+      // WICHTIG: Auch in Console loggen, damit Render-Logs es sehen
+      console.log(`✅ Signal in Datenbank gespeichert: ${signal.action.toUpperCase()} @ ${signal.price} USDT (${signal.differencePercent}%)`);
     }
   } catch (error) {
     console.error('❌ Fehler beim Loggen:', error.message);
+  }
+}
+
+/**
+ * Loggt wichtige Bot-Events in Supabase (für besseres Tracking)
+ */
+async function logBotEvent(level, message, data = {}) {
+  try {
+    const { error } = await supabase
+      .from('bot_logs')
+      .insert({
+        level: level,
+        message: message,
+        data: {
+          ...data,
+          timestamp: new Date().toISOString()
+        }
+      });
+
+    if (error) {
+      console.error('❌ Fehler beim Loggen des Events:', error.message);
+    }
+  } catch (error) {
+    console.error('❌ Fehler beim Loggen des Events:', error.message);
   }
 }
 
@@ -389,7 +518,7 @@ function calculateQuantity(price, symbol, strategy) {
 /**
  * Prüft ob Trading erlaubt ist
  */
-function canTrade(signal, strategy) {
+async function canTrade(signal, strategy) {
   // Trading Master-Switch prüfen
   if (!tradingEnabled) {
     console.log('⚠️  Trading ist global deaktiviert (TRADING_ENABLED=false)');
@@ -409,7 +538,8 @@ function canTrade(signal, strategy) {
   
   if (cooldownRemaining > 0) {
     const waitTime = Math.round(cooldownRemaining / 1000);
-    console.log(`⏳ Trade Cooldown aktiv - Warte noch ${waitTime}s`);
+    // WICHTIG: Deutliches Logging für Render-Logs
+    console.log(`⏳ TRADE COOLDOWN AKTIV - Warte noch ${waitTime}s (${Math.round(waitTime / 60)} Minuten)`);
     return false;
   }
 
@@ -426,9 +556,25 @@ function canTrade(signal, strategy) {
   if (signal.action === 'sell') {
     const positionKey = `${strategy.id}_${currentSymbol}`;
     if (!openPositions.has(positionKey)) {
-      console.log('⚠️  Keine offene Position zum Verkaufen');
+      console.log(`⚠️  KEINE OFFENE POSITION ZUM VERKAUFEN: ${positionKey}`);
+      console.log(`   Aktuelle offene Positionen: ${Array.from(openPositions.keys()).join(', ') || 'Keine'}`);
+      await logBotEvent('warning', `SELL-Signal ignoriert: Keine offene Position`, {
+        positionKey: positionKey,
+        openPositions: Array.from(openPositions.keys()),
+        symbol: currentSymbol,
+        strategy_id: strategy.id
+      });
       return false;
     }
+    
+    // KRITISCH: Position SOFORT entfernen, um Race-Conditions zu vermeiden!
+    // Wenn mehrere SELL-Signale gleichzeitig kommen, wird nur der erste ausgeführt
+    const position = openPositions.get(positionKey);
+    openPositions.delete(positionKey); // SOFORT löschen, bevor Trade ausgeführt wird
+    console.log(`📊 Position reserviert für SELL: ${positionKey} @ ${position.entryPrice} USDT`);
+    
+    // Position-Daten an Signal anhängen, damit sie später verwendet werden können
+    signal._positionData = position;
   }
 
   return true;
@@ -440,7 +586,9 @@ function canTrade(signal, strategy) {
 async function executeTrade(signal, strategy) {
   try {
     // Trading-Checks
-    if (!canTrade(signal, strategy)) {
+    if (!(await canTrade(signal, strategy))) {
+      // Logge warum Trade nicht ausgeführt wird
+      console.log(`⚠️  Trade nicht ausgeführt: canTrade() = false`);
       return null;
     }
 
@@ -485,10 +633,29 @@ async function executeTrade(signal, strategy) {
         orderId: order.orderId,
         timestamp: new Date()
       });
-      console.log(`📊 Position geöffnet: ${positionKey}`);
+      console.log(`📊 Position geöffnet: ${positionKey} @ ${signal.price} USDT`);
+      await logBotEvent('info', `Position geöffnet: ${symbol}`, {
+        positionKey: positionKey,
+        entryPrice: signal.price,
+        quantity: quantity,
+        orderId: order.orderId.toString(),
+        strategy_id: strategy.id
+      });
     } else {
-      openPositions.delete(positionKey);
-      console.log(`📊 Position geschlossen: ${positionKey}`);
+      // Bei SELL: Position wurde bereits in canTrade() gelöscht (Race-Condition-Schutz)
+      // Verwende die Position-Daten aus dem Signal
+      const closedPosition = signal._positionData;
+      if (closedPosition) {
+        console.log(`📊 Position geschlossen: ${positionKey} (Entry: ${closedPosition.entryPrice} USDT, Exit: ${avgPrice} USDT)`);
+        await logBotEvent('info', `Position geschlossen: ${symbol}`, {
+          positionKey: positionKey,
+          entryPrice: closedPosition.entryPrice,
+          exitPrice: avgPrice,
+          strategy_id: strategy.id
+        });
+      } else {
+        console.log(`⚠️  Position ${positionKey} wurde bereits geschlossen oder existiert nicht`);
+      }
     }
 
     // Trade in Datenbank speichern
@@ -508,6 +675,19 @@ async function executeTrade(signal, strategy) {
     console.error(`Code: ${error.code || 'N/A'}`);
     console.error('═══════════════════════════════════════════════');
     console.error('');
+
+    // WICHTIG: Bei SELL-Fehler Position wiederherstellen!
+    if (signal.action === 'sell' && signal._positionData) {
+      const positionKey = `${strategy.id}_${currentSymbol}`;
+      openPositions.set(positionKey, signal._positionData);
+      console.log(`🔄 Position wiederhergestellt nach fehlgeschlagenem SELL: ${positionKey}`);
+      await logBotEvent('warning', `Position wiederhergestellt nach fehlgeschlagenem SELL`, {
+        positionKey: positionKey,
+        error: error.message,
+        errorCode: error.code,
+        strategy_id: strategy.id
+      });
+    }
 
     // Fehler in Datenbank loggen
     await logTradeError(error, signal, strategy);
@@ -533,11 +713,13 @@ async function saveTradeToDatabase(order, signal, strategy) {
     let pnl = null;
     let pnlPercent = null;
     if (signal.action === 'sell') {
-      const positionKey = `${strategy.id}_${currentSymbol}`;
-      const position = openPositions.get(positionKey);
+      // Verwende Position-Daten aus Signal (wurde in canTrade() gespeichert)
+      const position = signal._positionData;
       if (position) {
         pnl = (avgPrice - position.entryPrice) * executedQty;
         pnlPercent = ((avgPrice - position.entryPrice) / position.entryPrice) * 100;
+      } else {
+        console.log(`⚠️  Keine Position-Daten für PnL-Berechnung gefunden`);
       }
     }
 
@@ -570,14 +752,42 @@ async function saveTradeToDatabase(order, signal, strategy) {
 
     if (error) {
       console.error('❌ Fehler beim Speichern in Datenbank:', error.message);
+      await logBotEvent('error', 'Fehler beim Speichern des Trades in Datenbank', {
+        error: error.message,
+        orderId: order.orderId,
+        symbol: currentSymbol
+      });
     } else {
-      console.log('✅ Trade in Datenbank gespeichert');
+      // WICHTIG: Deutliches Logging für Render-Logs
+      console.log('═══════════════════════════════════════════════');
+      console.log('✅ TRADE IN DATENBANK GESPEICHERT');
+      console.log(`   Symbol: ${currentSymbol}`);
+      console.log(`   Side: ${signal.action.toUpperCase()}`);
+      console.log(`   Preis: ${avgPrice} USDT`);
+      console.log(`   Menge: ${executedQty}`);
+      console.log(`   Order ID: ${order.orderId}`);
+      console.log('═══════════════════════════════════════════════');
+      
+      await logBotEvent('info', `Trade in Datenbank gespeichert: ${signal.action.toUpperCase()}`, {
+        symbol: currentSymbol,
+        side: signal.action,
+        price: avgPrice,
+        quantity: executedQty,
+        orderId: order.orderId.toString(),
+        strategy_id: strategy.id
+      });
       
       // Bei SELL: PnL anzeigen
       if (pnl !== null) {
         const pnlEmoji = pnl >= 0 ? '📈' : '📉';
         const pnlColor = pnl >= 0 ? '+' : '';
         console.log(`${pnlEmoji} PnL: ${pnlColor}${pnl.toFixed(2)} USDT (${pnlColor}${pnlPercent.toFixed(2)}%)`);
+        await logBotEvent('info', `Trade PnL berechnet: ${pnlColor}${pnl.toFixed(2)} USDT`, {
+          pnl: pnl,
+          pnlPercent: pnlPercent,
+          symbol: currentSymbol,
+          orderId: order.orderId.toString()
+        });
       }
     }
 
@@ -645,6 +855,9 @@ async function startTradingBot() {
     botStatus = 'gestoppt (keine Strategien)';
     return;
   }
+  
+  // WICHTIG: Offene Positionen aus der Datenbank laden (nach Neustart)
+  await loadOpenPositions();
 
   // Symbol aus erster aktiver Strategie
   currentSymbol = activeStrategies[0].symbol;
@@ -741,6 +954,11 @@ async function startTradingBot() {
         // Debug: Zeige alle 1000 Preise, dass Daten ankommen
         if (currentHistoryLength % 1000 === 0 && currentHistoryLength > 0) {
           console.log(`📡 Daten empfangen: ${currentHistoryLength} Preise verarbeitet | Letzte Aktualisierung: ${new Date().toISOString()}`);
+          // WICHTIG: Logge auch in Supabase, dass Daten empfangen werden (alle 1000 Preise)
+          await logBotEvent('debug', `Datenfluss: ${currentHistoryLength} Preise verarbeitet`, {
+            symbol: currentSymbol,
+            priceCount: currentHistoryLength
+          });
         }
         
         // Preis anzeigen (alle X Preise nur einen anzeigen, um Spam zu vermeiden)
@@ -796,9 +1014,42 @@ async function startTradingBot() {
 
           // Order ausführen (wenn aktiviert)
           if (tradingEnabled && binanceClient) {
-            await executeTrade(signal, strategy);
+            // WICHTIG: Logge vor Trade-Ausführung
+            console.log(`🔄 Versuche Trade auszuführen: ${signal.action.toUpperCase()} @ ${signal.price} USDT`);
+            await logBotEvent('info', `Trade-Ausführung gestartet: ${signal.action.toUpperCase()}`, {
+              action: signal.action,
+              price: signal.price,
+              symbol: strategy.symbol,
+              strategy_id: strategy.id
+            });
+            
+            const tradeResult = await executeTrade(signal, strategy);
+            
+            if (tradeResult) {
+              console.log(`✅ Trade erfolgreich ausgeführt: ${signal.action.toUpperCase()} @ ${signal.price} USDT`);
+              await logBotEvent('info', `Trade erfolgreich ausgeführt: ${signal.action.toUpperCase()}`, {
+                action: signal.action,
+                price: signal.price,
+                symbol: strategy.symbol,
+                orderId: tradeResult.orderId,
+                strategy_id: strategy.id
+              });
+            } else {
+              console.log(`⚠️  Trade nicht ausgeführt (Cooldown oder andere Checks)`);
+              await logBotEvent('warning', `Trade nicht ausgeführt: ${signal.action.toUpperCase()}`, {
+                action: signal.action,
+                price: signal.price,
+                symbol: strategy.symbol,
+                reason: 'Cooldown oder andere Checks',
+                strategy_id: strategy.id
+              });
+            }
           } else {
             console.log('💡 Trading deaktiviert - Nur Signal-Generierung');
+            await logBotEvent('info', 'Trading deaktiviert - Nur Signal-Generierung', {
+              tradingEnabled: tradingEnabled,
+              binanceClientAvailable: !!binanceClient
+            });
           }
         } 
         // Hold-Signal (nur gelegentlich anzeigen)
@@ -933,5 +1184,20 @@ app.listen(PORT, HOST, () => {
       console.log('💡 Bot kann manuell über POST /api/start-bot gestartet werden');
     }
   }, 3000);
+  
+  // AUTOMATISCHES NEULADEN DER EINSTELLUNGEN ALLE 5 MINUTEN
+  // Starte das Interval nach 1 Minute (damit initiale Einstellungen geladen sind)
+  setTimeout(() => {
+    console.log('🔄 Starte Auto-Reload für Bot-Einstellungen (alle 5 Minuten)...');
+    
+    settingsReloadInterval = setInterval(async () => {
+      await loadBotSettings(true); // silent = true für weniger Logs (loggt nur bei Änderungen)
+    }, 5 * 60 * 1000); // Alle 5 Minuten
+    
+    // Erste Aktualisierung nach 5 Minuten
+    setTimeout(async () => {
+      await loadBotSettings(true);
+    }, 5 * 60 * 1000);
+  }, 60000); // Starte nach 1 Minute
 });
 
