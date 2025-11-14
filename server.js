@@ -34,6 +34,11 @@ const supabase = createClient(supabaseUrl, supabaseKey);
 // Globale Variablen
 let botStatus = 'gestoppt';
 let tradingBotProcess = null;
+let activeStrategies = [];
+let priceHistory = [];
+const MAX_PRICE_HISTORY = 100; // Letzte 100 Preise speichern
+let lastSignalTime = 0; // Verhindert zu häufige Signale
+const SIGNAL_COOLDOWN = 60000; // 1 Minute zwischen Signalen
 
 // API-Routen
 
@@ -92,7 +97,182 @@ app.post('/api/stop-bot', (req, res) => {
   }
 });
 
-// Trading-Bot Funktionen
+// ═══════════════════════════════════════════════
+// TRADING-LOGIK FUNKTIONEN
+// ═══════════════════════════════════════════════
+
+/**
+ * Lädt aktive Trading-Strategien von Supabase
+ */
+async function loadStrategies() {
+  try {
+    console.log('📊 Lade Trading-Strategien von Supabase...');
+    
+    const { data: strategies, error } = await supabase
+      .from('strategies')
+      .select('*')
+      .eq('active', true);
+
+    if (error) {
+      console.error('❌ Fehler beim Laden der Strategien:', error);
+      return [];
+    }
+
+    if (!strategies || strategies.length === 0) {
+      console.log('⚠️  Keine aktiven Strategien gefunden');
+      console.log('💡 Tipp: Aktivieren Sie eine Strategie in Supabase (Table Editor → strategies → active = true)');
+      return [];
+    }
+
+    console.log(`✅ ${strategies.length} aktive Strategie(n) geladen:`);
+    strategies.forEach(s => {
+      console.log(`   📈 ${s.name} (${s.symbol})`);
+    });
+
+    return strategies;
+  } catch (error) {
+    console.error('❌ Fehler:', error);
+    return [];
+  }
+}
+
+/**
+ * Berechnet den Moving Average für eine bestimmte Periode
+ */
+function calculateMA(period) {
+  if (priceHistory.length < period) {
+    return null;
+  }
+
+  const slice = priceHistory.slice(-period);
+  const sum = slice.reduce((a, b) => a + b, 0);
+  return sum / period;
+}
+
+/**
+ * Generiert Trading-Signale basierend auf MA Crossover
+ */
+function generateSignal(currentPrice, strategy) {
+  const config = strategy.config;
+  const maShortPeriod = config.indicators.ma_short || 20;
+  const maLongPeriod = config.indicators.ma_long || 50;
+
+  // Prüfen ob genug Daten vorhanden
+  if (priceHistory.length < maLongPeriod) {
+    return {
+      action: 'wait',
+      reason: `Sammle Daten... ${priceHistory.length}/${maLongPeriod}`,
+      progress: Math.round((priceHistory.length / maLongPeriod) * 100)
+    };
+  }
+
+  const maShort = calculateMA(maShortPeriod);
+  const maLong = calculateMA(maLongPeriod);
+
+  if (!maShort || !maLong) {
+    return null;
+  }
+
+  const difference = maShort - maLong;
+  const differencePercent = (difference / maLong) * 100;
+
+  // Kauf-Signal: Kurzer MA über langem MA (Bullish)
+  if (differencePercent > 0.1) { // 0.1% Threshold
+    return {
+      action: 'buy',
+      price: currentPrice,
+      reason: `MA Crossover Bullish: MA${maShortPeriod}=${maShort.toFixed(2)} > MA${maLongPeriod}=${maLong.toFixed(2)}`,
+      maShort: maShort.toFixed(2),
+      maLong: maLong.toFixed(2),
+      difference: difference.toFixed(2),
+      differencePercent: differencePercent.toFixed(3),
+      confidence: Math.min(Math.abs(differencePercent) * 10, 100).toFixed(1)
+    };
+  }
+
+  // Verkauf-Signal: Kurzer MA unter langem MA (Bearish)
+  if (differencePercent < -0.1) { // -0.1% Threshold
+    return {
+      action: 'sell',
+      price: currentPrice,
+      reason: `MA Crossover Bearish: MA${maShortPeriod}=${maShort.toFixed(2)} < MA${maLongPeriod}=${maLong.toFixed(2)}`,
+      maShort: maShort.toFixed(2),
+      maLong: maLong.toFixed(2),
+      difference: difference.toFixed(2),
+      differencePercent: differencePercent.toFixed(3),
+      confidence: Math.min(Math.abs(differencePercent) * 10, 100).toFixed(1)
+    };
+  }
+
+  // Neutral: Kein klares Signal
+  return {
+    action: 'hold',
+    reason: 'Kein klares Signal',
+    maShort: maShort.toFixed(2),
+    maLong: maLong.toFixed(2),
+    difference: difference.toFixed(2),
+    differencePercent: differencePercent.toFixed(3)
+  };
+}
+
+/**
+ * Analysiert einen neuen Preis und gibt Trading-Signal zurück
+ */
+function analyzePrice(currentPrice, strategy) {
+  // Preis zur Historie hinzufügen
+  priceHistory.push(parseFloat(currentPrice));
+
+  // Historie begrenzen
+  if (priceHistory.length > MAX_PRICE_HISTORY) {
+    priceHistory.shift();
+  }
+
+  // Signal generieren
+  return generateSignal(currentPrice, strategy);
+}
+
+/**
+ * Loggt Trading-Signale in Supabase
+ */
+async function logSignal(signal, strategy) {
+  try {
+    // Nur wichtige Signale loggen (buy/sell)
+    if (signal.action !== 'buy' && signal.action !== 'sell') {
+      return;
+    }
+
+    const { error } = await supabase
+      .from('bot_logs')
+      .insert({
+        level: 'info',
+        message: `Trading Signal: ${signal.action.toUpperCase()}`,
+        strategy_id: strategy.id,
+        data: {
+          action: signal.action,
+          price: signal.price,
+          reason: signal.reason,
+          maShort: signal.maShort,
+          maLong: signal.maLong,
+          difference: signal.difference,
+          differencePercent: signal.differencePercent,
+          confidence: signal.confidence,
+          symbol: strategy.symbol
+        }
+      });
+
+    if (error) {
+      console.error('❌ Fehler beim Loggen in Supabase:', error.message);
+    } else {
+      console.log('✅ Signal in Datenbank gespeichert');
+    }
+  } catch (error) {
+    console.error('❌ Fehler beim Loggen:', error.message);
+  }
+}
+
+// ═══════════════════════════════════════════════
+// TRADING-BOT FUNKTIONEN
+// ═══════════════════════════════════════════════
 
 /**
  * Startet den Trading-Bot
@@ -110,13 +290,16 @@ async function startTradingBot() {
   console.log('🚀 Trading-Bot wird gestartet...');
   botStatus = 'startet...';
 
-  // Platzhalter: Strategien von Supabase laden
-  console.log('📊 Lade Trading-Strategien von Supabase...');
-  // TODO: Hier später die Strategien aus der Datenbank laden
-  // const { data: strategies, error } = await supabase
-  //   .from('strategies')
-  //   .select('*')
-  //   .eq('active', true);
+  // Strategien von Supabase laden
+  activeStrategies = await loadStrategies();
+  
+  if (activeStrategies.length === 0) {
+    console.log('⚠️  Bot startet im Beobachtungsmodus (keine aktiven Strategien)');
+  }
+
+  // Preishistorie zurücksetzen
+  priceHistory = [];
+  lastSignalTime = 0;
 
   // WebSocket-Verbindung zu Binance herstellen
   const binanceWsUrl = 'wss://stream.binance.com:9443/ws/btcusdt@trade';
@@ -132,22 +315,80 @@ async function startTradingBot() {
     botStatus = 'läuft (verbunden)';
   });
 
-  ws.on('message', (data) => {
+  ws.on('message', async (data) => {
     try {
       const message = JSON.parse(data.toString());
       
-      // Marktdaten in die Konsole loggen
       if (message.p) {  // 'p' ist der Preis bei Binance Trade Streams
-        console.log(`💰 BTC/USDT Preis: ${parseFloat(message.p).toFixed(2)} USDT | Menge: ${message.q}`);
-      }
+        const currentPrice = parseFloat(message.p);
+        const quantity = parseFloat(message.q);
 
-      // TODO: Hier später die Trading-Logik implementieren
-      // - Preis analysieren
-      // - Strategie-Signale prüfen
-      // - Orders platzieren
+        // Preis anzeigen (alle 10 Preise nur einen anzeigen, um Spam zu vermeiden)
+        if (priceHistory.length % 10 === 0) {
+          console.log(`💰 BTC/USDT: ${currentPrice.toFixed(2)} USDT | Vol: ${quantity.toFixed(6)} BTC`);
+        }
+
+        // Trading-Logik: Für jede aktive Strategie
+        if (activeStrategies.length > 0) {
+          for (const strategy of activeStrategies) {
+            // Nur Strategien für das richtige Symbol
+            if (strategy.symbol !== 'BTCUSDT') {
+              continue;
+            }
+
+            const signal = analyzePrice(currentPrice, strategy);
+
+            if (!signal) continue;
+
+            // Fortschritt anzeigen während Datensammlung
+            if (signal.action === 'wait') {
+              if (priceHistory.length % 20 === 0) {
+                console.log(`📊 ${signal.reason} (${signal.progress}%)`);
+              }
+              continue;
+            }
+
+            // Kauf- oder Verkauf-Signal
+            if (signal.action === 'buy' || signal.action === 'sell') {
+              // Cooldown prüfen (nicht zu häufig signalisieren)
+              const now = Date.now();
+              if (now - lastSignalTime < SIGNAL_COOLDOWN) {
+                continue;
+              }
+
+              console.log('');
+              console.log('═══════════════════════════════════════════════');
+              console.log(`🎯 TRADING SIGNAL: ${signal.action.toUpperCase()}`);
+              console.log('═══════════════════════════════════════════════');
+              console.log(`📊 Strategie: ${strategy.name}`);
+              console.log(`💰 Preis: ${signal.price} USDT`);
+              console.log(`📈 MA${strategy.config.indicators.ma_short}: ${signal.maShort}`);
+              console.log(`📉 MA${strategy.config.indicators.ma_long}: ${signal.maLong}`);
+              console.log(`📊 Differenz: ${signal.difference} (${signal.differencePercent}%)`);
+              console.log(`🎲 Konfidenz: ${signal.confidence}%`);
+              console.log(`💡 Grund: ${signal.reason}`);
+              console.log('═══════════════════════════════════════════════');
+              console.log('');
+
+              // Signal in Datenbank loggen
+              await logSignal(signal, strategy);
+
+              // Cooldown setzen
+              lastSignalTime = now;
+
+              // TODO: Hier später Order-Ausführung (Phase 2)
+              // await executeTrade(signal, strategy);
+            } 
+            // Hold-Signal (nur gelegentlich anzeigen)
+            else if (signal.action === 'hold' && priceHistory.length % 50 === 0) {
+              console.log(`📊 Hold - MA${strategy.config.indicators.ma_short}: ${signal.maShort} | MA${strategy.config.indicators.ma_long}: ${signal.maLong} | Diff: ${signal.differencePercent}%`);
+            }
+          }
+        }
+      }
       
     } catch (error) {
-      console.error('❌ Fehler beim Parsen der Marktdaten:', error);
+      console.error('❌ Fehler beim Verarbeiten der Marktdaten:', error);
     }
   });
 
@@ -155,6 +396,10 @@ async function startTradingBot() {
     console.log('🔌 WebSocket-Verbindung wurde geschlossen');
     botStatus = 'gestoppt (Verbindung verloren)';
     tradingBotProcess = null;
+    
+    // Reset
+    activeStrategies = [];
+    priceHistory = [];
   });
 
   ws.on('error', (error) => {
@@ -182,6 +427,11 @@ function stopTradingBot() {
   
   botStatus = 'gestoppt';
   tradingBotProcess = null;
+  
+  // Reset
+  activeStrategies = [];
+  priceHistory = [];
+  lastSignalTime = 0;
   
   console.log('✅ Trading-Bot wurde erfolgreich gestoppt');
 }
