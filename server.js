@@ -337,19 +337,22 @@ app.get('/api/trades', async (req, res) => {
  */
 app.get('/api/positions', async (req, res) => {
   try {
-    // Lade ALLE Strategien (nicht nur aktive), um alle offenen Positionen zu finden
+    // Lade nur AKTIVE Strategien, um nur relevante offene Positionen zu finden
     const { data: allStrategies, error: strategiesError } = await supabase
       .from('strategies')
-      .select('id, symbol, name');
+      .select('id, symbol, name, is_active')
+      .eq('is_active', true); // NUR aktive Strategien
     
     if (strategiesError) {
       console.error('Fehler beim Laden der Strategien:', strategiesError);
       throw strategiesError;
     }
     
+    console.log(`📊 Prüfe ${allStrategies?.length || 0} aktive Strategien auf offene Positionen`);
+    
     const allPositions = [];
     
-    // Für jede Strategie prüfen, ob es offene Positionen gibt
+    // Für jede aktive Strategie prüfen, ob es offene Positionen gibt
     for (const strategy of (allStrategies || [])) {
       const symbol = strategy.symbol;
       
@@ -368,6 +371,12 @@ app.get('/api/positions', async (req, res) => {
         continue;
       }
       
+      // Skip wenn keine BUY-Trades vorhanden
+      if (!buyTrades || buyTrades.length === 0) {
+        console.log(`📊 ${symbol}: Keine BUY-Trades vorhanden`);
+        continue;
+      }
+      
       // Lade alle SELL-Trades chronologisch sortiert
       const { data: sellTrades, error: sellError } = await supabase
         .from('trades')
@@ -383,39 +392,41 @@ app.get('/api/positions', async (req, res) => {
         continue;
       }
       
+      console.log(`📊 ${symbol}: ${buyTrades.length} BUY-Trades, ${sellTrades?.length || 0} SELL-Trades`);
+      
       // FIFO-Logik: Paare BUY- und SELL-Trades
       const openBuyTrades = [];
       let sellIndex = 0;
       
-      if (buyTrades) {
-        for (const buyTrade of buyTrades) {
-          let remainingQuantity = parseFloat(buyTrade.quantity);
+      for (const buyTrade of buyTrades) {
+        let remainingQuantity = parseFloat(buyTrade.quantity);
+        
+        // Versuche, diese BUY-Position mit SELL-Trades zu schließen
+        while (remainingQuantity > 0.00000001 && sellTrades && sellIndex < sellTrades.length) {
+          const sellTrade = sellTrades[sellIndex];
+          const sellQuantity = parseFloat(sellTrade.quantity);
           
-          // Versuche, diese BUY-Position mit SELL-Trades zu schließen
-          while (remainingQuantity > 0 && sellTrades && sellIndex < sellTrades.length) {
-            const sellTrade = sellTrades[sellIndex];
-            const sellQuantity = parseFloat(sellTrade.quantity);
-            
-            if (sellQuantity >= remainingQuantity) {
-              // Dieser SELL schließt die gesamte BUY-Position
-              remainingQuantity = 0;
-              sellIndex++;
-            } else {
-              // Dieser SELL schließt nur einen Teil der BUY-Position
-              remainingQuantity -= sellQuantity;
-              sellIndex++;
-            }
-          }
-          
-          // Wenn noch etwas übrig ist, ist die Position offen
-          if (remainingQuantity > 0) {
-            openBuyTrades.push({
-              ...buyTrade,
-              remainingQuantity: remainingQuantity
-            });
+          if (sellQuantity >= remainingQuantity) {
+            // Dieser SELL schließt die gesamte BUY-Position
+            remainingQuantity = 0;
+            sellIndex++;
+          } else {
+            // Dieser SELL schließt nur einen Teil der BUY-Position
+            remainingQuantity -= sellQuantity;
+            sellIndex++;
           }
         }
+        
+        // Wenn noch etwas übrig ist (mit Toleranz für Rundungsfehler), ist die Position offen
+        if (remainingQuantity > 0.00000001) {
+          openBuyTrades.push({
+            ...buyTrade,
+            remainingQuantity: remainingQuantity
+          });
+        }
       }
+      
+      console.log(`📊 ${symbol}: ${openBuyTrades.length} offene BUY-Trades`);
       
       // Wenn es offene Positionen gibt, berechne gewichteten Durchschnittspreis
       if (openBuyTrades.length > 0) {
@@ -429,7 +440,8 @@ app.get('/api/positions', async (req, res) => {
           totalQuantity += qty;
         }
         
-        if (totalQuantity > 0) {
+        // Mindestmenge prüfen (keine Positionen mit sehr kleinen Mengen anzeigen)
+        if (totalQuantity > 0.00000001) {
           const weightedAveragePrice = totalValue / totalQuantity;
           
           // Hole aktuellen Preis von Binance (falls verfügbar)
@@ -448,6 +460,8 @@ app.get('/api/positions', async (req, res) => {
             ? ((currentPrice - weightedAveragePrice) / weightedAveragePrice) * 100 
             : 0;
           
+          console.log(`✅ ${symbol}: Offene Position gefunden - Menge: ${totalQuantity.toFixed(8)}, Entry: ${weightedAveragePrice.toFixed(8)}, PnL: ${pnl.toFixed(2)} USDT`);
+          
           allPositions.push({
             id: `${strategy.id}_${symbol}`,
             symbol: symbol,
@@ -460,10 +474,14 @@ app.get('/api/positions', async (req, res) => {
             strategyName: strategy.name,
             createdAt: openBuyTrades[0].executed_at || openBuyTrades[0].created_at
           });
+        } else {
+          console.log(`⚠️  ${symbol}: Menge zu klein (${totalQuantity.toFixed(8)}), wird nicht als offene Position angezeigt`);
         }
       }
     }
 
+    console.log(`📊 Insgesamt ${allPositions.length} offene Positionen gefunden`);
+    
     res.json({ 
       success: true, 
       positions: allPositions 

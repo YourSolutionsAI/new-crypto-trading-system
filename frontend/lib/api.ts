@@ -106,38 +106,18 @@ export const getTrades = async (limit = 50, offset = 0): Promise<Trade[]> => {
 export const getPositions = async (): Promise<Position[]> => {
   try {
     const response = await api.get('/api/positions');
-    console.log('📊 Positions API Response:', response.data);
     const positions = response.data.positions || [];
-    console.log('📊 Raw Positions:', positions);
-    
-    // WICHTIG: Filtere Positionen mit quantity = 0 oder null heraus
-    // Eine Position ist nur offen, wenn quantity > 0
-    const validPositions = positions.filter((pos: any) => {
-      const qty = pos.quantity || 0;
-      const isValid = qty > 0;
-      if (!isValid) {
-        console.log(`⚠️ Filtere Position mit quantity=0: ${pos.symbol} (${qty})`);
-      }
-      return isValid;
-    });
-    
-    console.log(`📊 Gefilterte Positionen: ${validPositions.length} von ${positions.length}`);
-    
     // Sicherstellen, dass alle Werte definiert sind
-    return validPositions.map((pos: any) => {
-      const mapped = {
-        symbol: pos.symbol || '',
-        quantity: pos.quantity || 0,
-        entryPrice: pos.entryPrice || 0,
-        currentPrice: pos.currentPrice || 0,
-        pnl: pos.pnl || 0,
-        pnlPercent: pos.pnlPercent || 0,
-      };
-      console.log(`📊 Position: ${mapped.symbol} - Quantity: ${mapped.quantity}, Entry: ${mapped.entryPrice}`);
-      return mapped;
-    });
+    return positions.map((pos: any) => ({
+      symbol: pos.symbol || '',
+      quantity: pos.quantity || 0,
+      entryPrice: pos.entryPrice || 0,
+      currentPrice: pos.currentPrice || 0,
+      pnl: pos.pnl || 0,
+      pnlPercent: pos.pnlPercent || 0,
+    }));
   } catch (error) {
-    console.error('❌ Fehler beim Laden der Positionen:', error);
+    console.error('Fehler beim Laden der Positionen:', error);
     return [];
   }
 };

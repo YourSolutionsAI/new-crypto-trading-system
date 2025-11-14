@@ -25,11 +25,6 @@ export default function Dashboard() {
         getPositions().catch(() => []),
         getTrades(10).catch(() => []),
       ]);
-      console.log('📊 Dashboard - Geladene Daten:');
-      console.log('  Status:', status);
-      console.log('  Positionen:', pos);
-      console.log('  Trades:', trades);
-      
       setBotStatus(status);
       setPositions(pos);
       setRecentTrades(trades);
@@ -90,7 +85,7 @@ export default function Dashboard() {
       <div className="mb-6">
         <div className="flex justify-between items-center mb-4">
           <h2 className="text-xl font-semibold text-gray-900">
-            Offene Positionen ({positions.filter(p => (p.quantity || 0) > 0).length})
+            Offene Positionen ({positions.length})
           </h2>
           <Link
             href="/trades"
@@ -106,8 +101,8 @@ export default function Dashboard() {
         ) : (
           <div className="bg-white shadow overflow-hidden sm:rounded-md">
             <ul className="divide-y divide-gray-200">
-              {positions.filter(p => (p.quantity || 0) > 0).map((position) => (
-                <li key={`${position.symbol}-${position.entryPrice}`} className="px-6 py-4">
+              {positions.map((position) => (
+                <li key={position.symbol} className="px-6 py-4">
                   <div className="flex items-center justify-between">
                     <div>
                       <p className="text-sm font-medium text-gray-900">
