@@ -302,7 +302,8 @@ async function startTradingBot() {
   lastSignalTime = 0;
 
   // WebSocket-Verbindung zu Binance herstellen
-  const binanceWsUrl = 'wss://stream.binance.com:9443/ws/btcusdt@trade';
+  // DOGE ist sehr volatil und generiert schnell Signale für Tests!
+  const binanceWsUrl = 'wss://stream.binance.com:9443/ws/dogeusdt@trade';
   console.log(`🔌 Stelle Verbindung zu Binance her: ${binanceWsUrl}`);
 
   const ws = new WebSocket(binanceWsUrl);
@@ -325,14 +326,15 @@ async function startTradingBot() {
 
         // Preis anzeigen (alle 10 Preise nur einen anzeigen, um Spam zu vermeiden)
         if (priceHistory.length % 10 === 0) {
-          console.log(`💰 BTC/USDT: ${currentPrice.toFixed(2)} USDT | Vol: ${quantity.toFixed(6)} BTC`);
+          console.log(`💰 DOGE/USDT: ${currentPrice.toFixed(6)} USDT | Vol: ${quantity.toFixed(2)} DOGE`);
         }
 
         // Trading-Logik: Für jede aktive Strategie
         if (activeStrategies.length > 0) {
           for (const strategy of activeStrategies) {
             // Nur Strategien für das richtige Symbol
-            if (strategy.symbol !== 'BTCUSDT') {
+            // Akzeptiere BTCUSDT, DOGEUSDT und andere USDT-Paare
+            if (!strategy.symbol.endsWith('USDT')) {
               continue;
             }
 
