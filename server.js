@@ -177,7 +177,7 @@ function generateSignal(currentPrice, strategy) {
   const differencePercent = (difference / maLong) * 100;
 
   // Kauf-Signal: Kurzer MA über langem MA (Bullish)
-  if (differencePercent > 0.1) { // 0.1% Threshold
+  if (differencePercent > 0.01) { // 0.01% Threshold (sensitiver für Tests)
     return {
       action: 'buy',
       price: currentPrice,
@@ -191,7 +191,7 @@ function generateSignal(currentPrice, strategy) {
   }
 
   // Verkauf-Signal: Kurzer MA unter langem MA (Bearish)
-  if (differencePercent < -0.1) { // -0.1% Threshold
+  if (differencePercent < -0.01) { // -0.01% Threshold (sensitiver für Tests)
     return {
       action: 'sell',
       price: currentPrice,
