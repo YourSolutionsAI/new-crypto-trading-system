@@ -673,115 +673,168 @@ async function startTradingBot() {
     
     // Heartbeat-Log alle 5 Minuten, um zu zeigen, dass die Verbindung noch aktiv ist
     const heartbeatInterval = setInterval(() => {
-      if (tradingBotProcess === ws) {
+      if (tradingBotProcess === ws && ws.readyState === WebSocket.OPEN) {
         const now = new Date().toISOString();
-        console.log(`💓 Heartbeat: ${now} | Preis-Historie: ${priceHistory.length} | Status: ${botStatus}`);
+        console.log(`💓 Heartbeat: ${now} | Preis-Historie: ${priceHistory.length} | Status: ${botStatus} | WS-State: ${ws.readyState}`);
       } else {
         clearInterval(heartbeatInterval);
       }
     }, 5 * 60 * 1000); // Alle 5 Minuten
+    
+    // Ping alle 30 Sekunden, um Verbindung am Leben zu halten
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+      } else {
+        clearInterval(pingInterval);
+      }
+    }, 30000);
+    
+    // Speichere Interval-IDs für Cleanup
+    ws._intervals = { heartbeatInterval, pingInterval };
+    
+    // Pong-Handler für Verbindungsüberwachung
+    ws.on('pong', () => {
+      // Verbindung ist aktiv - kein Log nötig, aber könnte für Debugging verwendet werden
+    });
   });
 
   ws.on('message', async (data) => {
     try {
       const message = JSON.parse(data.toString());
       
-      // Debug: Zeige alle 1000 Nachrichten, dass Daten ankommen
-      if (priceHistory.length % 1000 === 0 && priceHistory.length > 0) {
-        console.log(`📡 Daten empfangen: ${priceHistory.length} Preise verarbeitet | Letzte Aktualisierung: ${new Date().toISOString()}`);
+      // VALIDIERUNG: Prüfe ob Nachricht das erwartete Format hat
+      if (!message.p) {
+        // Logge gelegentlich (1% der Nachrichten ohne Preis), um zu sehen ob Daten ankommen
+        if (Math.random() < 0.01) {
+          console.log(`⚠️  Nachricht ohne Preis empfangen: ${JSON.stringify(message).substring(0, 100)}`);
+        }
+        return; // Überspringe Nachrichten ohne Preis
       }
       
-      if (message.p) {  // 'p' ist der Preis bei Binance Trade Streams
-        const currentPrice = parseFloat(message.p);
-        const quantity = parseFloat(message.q);
+      const currentPrice = parseFloat(message.p);
+      const quantity = parseFloat(message.q || 0);
+      
+      // VALIDIERUNG: Prüfe ob Preis gültig ist
+      if (isNaN(currentPrice) || currentPrice <= 0) {
+        console.error(`❌ Ungültiger Preis empfangen: ${message.p}`);
+        return;
+      }
 
+      // Trading-Logik: Für jede aktive Strategie
+      if (activeStrategies.length === 0) {
+        // Logge gelegentlich, wenn keine Strategien aktiv sind
+        if (Math.random() < 0.001) { // Sehr selten (0.1%)
+          console.log(`⚠️  Keine aktiven Strategien - Daten werden empfangen aber nicht verarbeitet`);
+        }
+        return;
+      }
+      
+      for (const strategy of activeStrategies) {
+        const signal = analyzePrice(currentPrice, strategy); // HIER wird priceHistory erhöht!
+        
+        if (!signal) continue;
+        
+        // JETZT können wir mit der korrekten priceHistory.length arbeiten
+        const currentHistoryLength = priceHistory.length;
+        
+        // Debug: Zeige alle 1000 Preise, dass Daten ankommen
+        if (currentHistoryLength % 1000 === 0 && currentHistoryLength > 0) {
+          console.log(`📡 Daten empfangen: ${currentHistoryLength} Preise verarbeitet | Letzte Aktualisierung: ${new Date().toISOString()}`);
+        }
+        
         // Preis anzeigen (alle X Preise nur einen anzeigen, um Spam zu vermeiden)
         const priceLogInterval = botSettings.logging_price_log_interval || 10;
-        if (priceHistory.length % priceLogInterval === 0) {
+        if (currentHistoryLength % priceLogInterval === 0) {
           const priceDecimals = currentPrice < 1 ? 6 : 2;
           console.log(`💰 ${currentSymbol}: ${currentPrice.toFixed(priceDecimals)} USDT | Vol: ${quantity.toFixed(2)}`);
         }
 
-        // Trading-Logik: Für jede aktive Strategie
-        if (activeStrategies.length > 0) {
-          for (const strategy of activeStrategies) {
-            // Akzeptiere alle USDT-Paare (Symbol-Check nicht mehr nötig)
-            // Das aktuelle Symbol kommt aus der WebSocket-Verbindung
+        // Fortschritt anzeigen während Datensammlung
+        if (signal.action === 'wait') {
+          const showProgress = botSettings.logging_show_data_progress !== false;
+          if (showProgress && currentHistoryLength % 20 === 0) {
+            console.log(`📊 ${signal.reason} (${signal.progress}%)`);
+          }
+          continue;
+        }
 
-            const signal = analyzePrice(currentPrice, strategy);
-
-            if (!signal) continue;
-
-            // Fortschritt anzeigen während Datensammlung
-            if (signal.action === 'wait') {
-              const showProgress = botSettings.logging_show_data_progress !== false;
-              if (showProgress && priceHistory.length % 20 === 0) {
-                console.log(`📊 ${signal.reason} (${signal.progress}%)`);
-              }
-              continue;
+        // Kauf- oder Verkauf-Signal
+        if (signal.action === 'buy' || signal.action === 'sell') {
+          // Cooldown prüfen (nicht zu häufig signalisieren)
+          const now = Date.now();
+          const signalCooldown = botSettings.signal_cooldown_ms || 60000;
+          const signalCooldownRemaining = signalCooldown - (now - lastSignalTime);
+          
+          if (signalCooldownRemaining > 0) {
+            const verbose = botSettings.logging_verbose === true;
+            if (verbose) {
+              console.log(`⏳ Signal Cooldown: ${Math.round(signalCooldownRemaining / 1000)}s`);
             }
+            continue;
+          }
 
-            // Kauf- oder Verkauf-Signal
-            if (signal.action === 'buy' || signal.action === 'sell') {
-              // Cooldown prüfen (nicht zu häufig signalisieren)
-              const now = Date.now();
-              const signalCooldown = botSettings.signal_cooldown_ms || 60000;
-              const signalCooldownRemaining = signalCooldown - (now - lastSignalTime);
-              
-              if (signalCooldownRemaining > 0) {
-                const verbose = botSettings.logging_verbose === true;
-                if (verbose) {
-                  console.log(`⏳ Signal Cooldown: ${Math.round(signalCooldownRemaining / 1000)}s`);
-                }
-                continue;
-              }
+          console.log('');
+          console.log('═══════════════════════════════════════════════');
+          console.log(`🎯 TRADING SIGNAL: ${signal.action.toUpperCase()}`);
+          console.log('═══════════════════════════════════════════════');
+          console.log(`📊 Strategie: ${strategy.name}`);
+          console.log(`💰 Preis: ${signal.price} USDT`);
+          console.log(`📈 MA${strategy.config.indicators.ma_short}: ${signal.maShort}`);
+          console.log(`📉 MA${strategy.config.indicators.ma_long}: ${signal.maLong}`);
+          console.log(`📊 Differenz: ${signal.difference} (${signal.differencePercent}%)`);
+          console.log(`🎲 Konfidenz: ${signal.confidence}%`);
+          console.log(`💡 Grund: ${signal.reason}`);
+          console.log('═══════════════════════════════════════════════');
+          console.log('');
 
-              console.log('');
-              console.log('═══════════════════════════════════════════════');
-              console.log(`🎯 TRADING SIGNAL: ${signal.action.toUpperCase()}`);
-              console.log('═══════════════════════════════════════════════');
-              console.log(`📊 Strategie: ${strategy.name}`);
-              console.log(`💰 Preis: ${signal.price} USDT`);
-              console.log(`📈 MA${strategy.config.indicators.ma_short}: ${signal.maShort}`);
-              console.log(`📉 MA${strategy.config.indicators.ma_long}: ${signal.maLong}`);
-              console.log(`📊 Differenz: ${signal.difference} (${signal.differencePercent}%)`);
-              console.log(`🎲 Konfidenz: ${signal.confidence}%`);
-              console.log(`💡 Grund: ${signal.reason}`);
-              console.log('═══════════════════════════════════════════════');
-              console.log('');
+          // Signal in Datenbank loggen
+          await logSignal(signal, strategy);
 
-              // Signal in Datenbank loggen
-              await logSignal(signal, strategy);
+          // Cooldown setzen
+          lastSignalTime = now;
 
-              // Cooldown setzen
-              lastSignalTime = now;
-
-              // Order ausführen (wenn aktiviert)
-              if (tradingEnabled && binanceClient) {
-                await executeTrade(signal, strategy);
-              } else {
-                console.log('💡 Trading deaktiviert - Nur Signal-Generierung');
-              }
-            } 
-            // Hold-Signal (nur gelegentlich anzeigen)
-            else if (signal.action === 'hold') {
-              const showHold = botSettings.logging_show_hold_signals !== false;
-              const holdInterval = botSettings.logging_hold_log_interval || 50;
-              if (showHold && priceHistory.length % holdInterval === 0) {
-                console.log(`📊 Hold - MA${strategy.config.indicators.ma_short}: ${signal.maShort} | MA${strategy.config.indicators.ma_long}: ${signal.maLong} | Diff: ${signal.differencePercent}%`);
-              }
-            }
+          // Order ausführen (wenn aktiviert)
+          if (tradingEnabled && binanceClient) {
+            await executeTrade(signal, strategy);
+          } else {
+            console.log('💡 Trading deaktiviert - Nur Signal-Generierung');
+          }
+        } 
+        // Hold-Signal (nur gelegentlich anzeigen)
+        else if (signal.action === 'hold') {
+          const showHold = botSettings.logging_show_hold_signals !== false;
+          const holdInterval = botSettings.logging_hold_log_interval || 50;
+          if (showHold && currentHistoryLength % holdInterval === 0) {
+            console.log(`📊 Hold - MA${strategy.config.indicators.ma_short}: ${signal.maShort} | MA${strategy.config.indicators.ma_long}: ${signal.maLong} | Diff: ${signal.differencePercent}%`);
           }
         }
       }
       
     } catch (error) {
-      console.error('❌ Fehler beim Verarbeiten der Marktdaten:', error);
+      // VERBESSERTE FEHLERBEHANDLUNG
+      console.error('═══════════════════════════════════════════════');
+      console.error('❌ Fehler beim Verarbeiten der Marktdaten');
+      console.error(`   Fehler: ${error.message || error}`);
+      console.error(`   Stack: ${error.stack || 'N/A'}`);
+      // Logge auch die rohen Daten (begrenzt)
+      if (data && data.toString) {
+        const dataStr = data.toString().substring(0, 200);
+        console.error(`   Empfangene Daten: ${dataStr}`);
+      }
+      console.error('═══════════════════════════════════════════════');
     }
   });
 
   ws.on('close', (code, reason) => {
     const timestamp = new Date().toISOString();
+    
+    // Cleanup Intervals
+    if (ws._intervals) {
+      clearInterval(ws._intervals.heartbeatInterval);
+      clearInterval(ws._intervals.pingInterval);
+    }
+    
     console.log('═══════════════════════════════════════════════');
     console.log('🔌 WebSocket-Verbindung wurde geschlossen');
     console.log(`   Zeitpunkt: ${timestamp}`);
@@ -866,5 +919,19 @@ app.listen(PORT, HOST, () => {
   console.log(`  POST /api/start-bot  - Bot starten`);
   console.log(`  POST /api/stop-bot   - Bot stoppen`);
   console.log('═══════════════════════════════════════════════');
+  
+  // AUTOMATISCHER BOT-START BEIM SERVER-START
+  // Warte 3 Sekunden, damit Supabase-Verbindung aufgebaut ist
+  setTimeout(async () => {
+    console.log('');
+    console.log('🚀 Starte Trading-Bot automatisch...');
+    try {
+      await startTradingBot();
+      console.log('✅ Bot wurde automatisch gestartet');
+    } catch (error) {
+      console.error('❌ Fehler beim automatischen Start:', error);
+      console.log('💡 Bot kann manuell über POST /api/start-bot gestartet werden');
+    }
+  }, 3000);
 });
 
