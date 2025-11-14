@@ -64,7 +64,6 @@ let openPositions = new Map(); // Tracking offener Positionen
 let currentSymbol = null; // Wird aus Supabase geladen
 let botSettings = {}; // Bot-Einstellungen aus Supabase
 let lotSizes = {}; // Lot Size Regeln aus Supabase
-const MAX_PRICE_HISTORY = 100; // Maximale Preishistorie
 
 // API-Routen
 
@@ -291,8 +290,9 @@ function analyzePrice(currentPrice, strategy) {
   // Preis zur Historie hinzufügen
   priceHistory.push(parseFloat(currentPrice));
 
-  // Historie begrenzen
-  if (priceHistory.length > MAX_PRICE_HISTORY) {
+  // Historie begrenzen (aus Supabase oder Fallback 100)
+  const maxPriceHistory = botSettings.max_price_history || 100;
+  if (priceHistory.length > maxPriceHistory) {
     priceHistory.shift();
   }
 

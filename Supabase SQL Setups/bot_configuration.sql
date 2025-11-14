@@ -80,7 +80,10 @@ VALUES
   ('logging_verbose', 'false'::jsonb, 'Ausführliche Logs'),
   ('logging_show_hold_signals', 'true'::jsonb, 'Hold-Signale anzeigen'),
   ('logging_price_log_interval', '10'::jsonb, 'Preis alle X Updates loggen'),
-  ('logging_hold_log_interval', '50'::jsonb, 'Hold-Signal alle X Updates loggen')
+  ('logging_hold_log_interval', '50'::jsonb, 'Hold-Signal alle X Updates loggen'),
+  
+  -- Preis-Historie
+  ('max_price_history', '100'::jsonb, 'Maximale Anzahl gespeicherter Preise für MA-Berechnung')
 ON CONFLICT (key) DO UPDATE SET 
   value = EXCLUDED.value,
   updated_at = NOW();
