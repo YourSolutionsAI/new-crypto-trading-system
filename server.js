@@ -200,6 +200,7 @@ async function loadBotSettings(silent = false) {
 
 /**
  * Lädt offene Positionen aus der Datenbank (BUY ohne entsprechenden SELL)
+ * Korrigierte Logik: Paart BUY- und SELL-Trades chronologisch und berechnet verbleibende Positionen
  */
 async function loadOpenPositions() {
   try {
@@ -209,7 +210,7 @@ async function loadOpenPositions() {
     for (const strategy of activeStrategies) {
       const symbol = strategy.symbol;
       
-      // Zähle BUY-Trades ohne entsprechenden SELL
+      // Lade alle BUY-Trades chronologisch sortiert
       const { data: buyTrades, error: buyError } = await supabase
         .from('trades')
         .select('*')
@@ -217,13 +218,14 @@ async function loadOpenPositions() {
         .eq('symbol', symbol)
         .eq('side', 'buy')
         .eq('status', 'executed')
-        .order('executed_at', { ascending: false });
+        .order('executed_at', { ascending: true }); // Chronologisch sortiert
       
       if (buyError) {
         console.error(`❌ Fehler beim Laden der BUY-Trades für ${symbol}:`, buyError);
         continue;
       }
       
+      // Lade alle SELL-Trades chronologisch sortiert
       const { data: sellTrades, error: sellError } = await supabase
         .from('trades')
         .select('*')
@@ -231,39 +233,102 @@ async function loadOpenPositions() {
         .eq('symbol', symbol)
         .eq('side', 'sell')
         .eq('status', 'executed')
-        .order('executed_at', { ascending: false });
+        .order('executed_at', { ascending: true }); // Chronologisch sortiert
       
       if (sellError) {
         console.error(`❌ Fehler beim Laden der SELL-Trades für ${symbol}:`, sellError);
         continue;
       }
       
-      // Zähle offene Positionen: BUY ohne entsprechenden SELL
-      let buyCount = buyTrades ? buyTrades.length : 0;
-      let sellCount = sellTrades ? sellTrades.length : 0;
-      const openCount = buyCount - sellCount;
+      const buyCount = buyTrades ? buyTrades.length : 0;
+      const sellCount = sellTrades ? sellTrades.length : 0;
       
-      if (openCount > 0) {
-        // Nehm den letzten BUY-Trade als offene Position
-        const lastBuyTrade = buyTrades[0];
+      console.log(`   📊 ${symbol}: ${buyCount} BUY-Trades, ${sellCount} SELL-Trades`);
+      
+      // Paare BUY- und SELL-Trades chronologisch
+      // FIFO (First In First Out): Älteste BUY-Trades werden zuerst verkauft
+      let buyIndex = 0;
+      let sellIndex = 0;
+      let totalOpenQuantity = 0;
+      let weightedAveragePrice = 0;
+      let totalValue = 0;
+      const openBuyTrades = [];
+      
+      // Paare BUY- und SELL-Trades
+      while (buyIndex < buyCount && sellIndex < sellCount) {
+        const buyTrade = buyTrades[buyIndex];
+        const sellTrade = sellTrades[sellIndex];
+        
+        // Wenn BUY vor SELL war, ist BUY noch offen
+        if (new Date(buyTrade.executed_at) < new Date(sellTrade.executed_at)) {
+          openBuyTrades.push(buyTrade);
+          totalOpenQuantity += parseFloat(buyTrade.quantity);
+          totalValue += parseFloat(buyTrade.price) * parseFloat(buyTrade.quantity);
+          buyIndex++;
+        } else {
+          // SELL schließt BUY
+          buyIndex++;
+          sellIndex++;
+        }
+      }
+      
+      // Alle verbleibenden BUY-Trades sind offen
+      while (buyIndex < buyCount) {
+        const buyTrade = buyTrades[buyIndex];
+        openBuyTrades.push(buyTrade);
+        totalOpenQuantity += parseFloat(buyTrade.quantity);
+        totalValue += parseFloat(buyTrade.price) * parseFloat(buyTrade.quantity);
+        buyIndex++;
+      }
+      
+      // Wenn es offene Positionen gibt, speichere sie
+      if (openBuyTrades.length > 0) {
         const positionKey = `${strategy.id}_${symbol}`;
+        
+        // Berechne gewichteten Durchschnittspreis
+        weightedAveragePrice = totalValue / totalOpenQuantity;
+        
+        // Verwende den letzten BUY-Trade für Order-ID und Timestamp
+        const lastBuyTrade = openBuyTrades[openBuyTrades.length - 1];
         
         openPositions.set(positionKey, {
           symbol: symbol,
-          entryPrice: parseFloat(lastBuyTrade.price),
-          quantity: parseFloat(lastBuyTrade.quantity),
+          entryPrice: weightedAveragePrice,
+          quantity: totalOpenQuantity,
           orderId: lastBuyTrade.order_id,
-          timestamp: new Date(lastBuyTrade.executed_at)
+          timestamp: new Date(lastBuyTrade.executed_at),
+          buyTradeCount: openBuyTrades.length,
+          individualTrades: openBuyTrades.map(t => ({
+            orderId: t.order_id,
+            price: parseFloat(t.price),
+            quantity: parseFloat(t.quantity),
+            executedAt: t.executed_at
+          }))
         });
         
-        console.log(`✅ Offene Position geladen: ${symbol} @ ${lastBuyTrade.price} USDT (${lastBuyTrade.quantity} Stück)`);
+        console.log(`✅ Offene Position geladen: ${symbol}`);
+        console.log(`   📊 Anzahl BUY-Trades: ${openBuyTrades.length}`);
+        console.log(`   💰 Gesamtmenge: ${totalOpenQuantity.toFixed(2)}`);
+        console.log(`   💵 Gewichteter Durchschnittspreis: ${weightedAveragePrice.toFixed(6)} USDT`);
+        console.log(`   📈 Gesamtwert: ${totalValue.toFixed(2)} USDT`);
+      } else {
+        console.log(`   ✅ Keine offenen Positionen für ${symbol}`);
       }
     }
     
     console.log(`✅ ${openPositions.size} offene Position(en) geladen`);
     
+    // Zeige alle geladenen Positionen
+    if (openPositions.size > 0) {
+      console.log('📊 Geladene Positionen:');
+      openPositions.forEach((position, key) => {
+        console.log(`   ${key}: ${position.quantity.toFixed(2)} @ ${position.entryPrice.toFixed(6)} USDT`);
+      });
+    }
+    
   } catch (error) {
     console.error('❌ Fehler beim Laden der offenen Positionen:', error);
+    console.error('   Stack:', error.stack);
   }
 }
 
