@@ -12,7 +12,7 @@
 |-------|--------|-----------|-------------------|
 | **Phase 1** | ✅ Abgeschlossen | - | - |
 | **Phase 2** | ✅ Abgeschlossen | - | - |
-| **Phase 3** | 🔄 In Planung | Mittel | 2-3 Wochen |
+| **Phase 3** | ✅ Abgeschlossen | - | - |
 | **Phase 4** | 📅 Geplant | Niedrig | 3-4 Wochen |
 
 ---
@@ -103,82 +103,122 @@ const tradeCooldown = strategy.config.settings?.trade_cooldown_ms;
 
 ---
 
-## 📊 PHASE 3: Erweiterte Trading-Features
+## 📊 PHASE 3: Erweiterte Trading-Features - ✅ ABGESCHLOSSEN
 
 ### **Ziel:**
 Bot intelligenter und profitabler machen.
 
-### **Features:**
+### **Was wurde implementiert:**
 
-#### **1. Stop-Loss & Take-Profit**
+#### **1. Stop-Loss & Take-Profit** ✅
 ```javascript
-// Stop-Loss bei -2%
-if (currentPrice < entryPrice * 0.98) {
-  executeSell('stop_loss');
+// Implementiert: Automatische Prüfung bei jedem Preis-Update
+async function checkStopLossTakeProfit(currentPrice, symbol) {
+  // Prüft alle offenen Positionen auf Stop-Loss/Take-Profit
+  if (priceChangePercent <= -stopLossPercent) {
+    executeSell('stop_loss');
+  }
+  if (priceChangePercent >= takeProfitPercent) {
+    executeSell('take_profit');
+  }
 }
-
-// Take-Profit bei +5%
-if (currentPrice > entryPrice * 1.05) {
-  executeSell('take_profit');
-}
 ```
 
-**Aufgaben:**
-- [ ] Stop-Loss Implementierung
-- [ ] Take-Profit Implementierung
-- [ ] Trailing Stop (optional)
-- [ ] Config in Supabase
+**Erledigt:**
+- [x] Stop-Loss Implementierung (`checkStopLossTakeProfit()` Funktion)
+- [x] Take-Profit Implementierung
+- [x] Integration in WebSocket-Handler (bei jedem Preis-Update)
+- [x] Config in Supabase (`phase3_indicators_config.sql`)
+- [x] Logging und Event-Tracking
 
-#### **2. Weitere Technische Indikatoren**
+**Konfiguration:**
+- Stop-Loss: Standard 2% (konfigurierbar pro Strategie)
+- Take-Profit: Standard 5% (konfigurierbar pro Strategie)
+- Aktivierung über `strategy.config.risk.stop_loss_percent` und `take_profit_percent`
+
+#### **2. Weitere Technische Indikatoren** ✅
 ```javascript
-// RSI (Relative Strength Index)
-const rsi = calculateRSI(prices, 14);
-if (rsi < 30) buySignal(); // Oversold
-if (rsi > 70) sellSignal(); // Overbought
-
-// MACD (Moving Average Convergence Divergence)
-const macd = calculateMACD(prices);
-if (macd.signal > macd.macd) buySignal();
+// Implementiert: RSI, MACD, Bollinger Bands, Stochastic
+const rsi = calculateRSI(priceHistory, 14);
+const macd = calculateMACD(priceHistory, 12, 26, 9);
+const bollinger = calculateBollingerBands(priceHistory, 20, 2);
+const stochastic = calculateStochastic(highs, lows, closes, 14);
 ```
 
-**Aufgaben:**
-- [ ] RSI-Berechnung
-- [ ] MACD-Berechnung
-- [ ] Bollinger Bands
-- [ ] Stochastic Oscillator
-- [ ] Kombination mit MA Crossover
+**Erledigt:**
+- [x] RSI-Berechnung (`calculateRSI()`)
+- [x] MACD-Berechnung (`calculateMACD()`)
+- [x] Bollinger Bands (`calculateBollingerBands()`)
+- [x] Stochastic Oscillator (`calculateStochastic()`)
+- [x] EMA-Berechnung (`calculateEMA()`)
+- [x] Kombination mit MA Crossover in `generateSignal()`
+- [x] Confidence-Anpassung basierend auf Indikatoren
+- [x] Indikatoren in Signal-Logging integriert
 
-#### **3. Backtesting-System**
+**Features:**
+- RSI-Filter: Reduziert Confidence bei überkauftem/überverkauftem Markt
+- MACD-Filter: Erhöht Confidence bei bullish/bearish MACD
+- Bollinger Bands: Erhöht Confidence bei Preis unter/über Bändern
+- Alle Indikatoren optional (werden nur verwendet wenn konfiguriert)
+
+#### **3. Backtesting-System** ✅
 ```javascript
-// Historische Daten testen
-const results = backtest(strategy, historicalData);
-console.log(`Win Rate: ${results.winRate}%`);
-console.log(`Total PnL: ${results.totalPnl}`);
+// Implementiert: Vollständiges Backtesting-System
+const results = await runBacktest(strategy, symbol, startDate, endDate, timeframe);
+// API: POST /api/backtest
 ```
 
-**Aufgaben:**
-- [ ] Historische Daten laden (CCXT)
-- [ ] Backtesting-Engine
-- [ ] Performance-Metriken
-- [ ] Strategie-Optimierung
+**Erledigt:**
+- [x] Historische Daten laden (CCXT Integration)
+- [x] Backtesting-Engine (`runBacktest()` Funktion)
+- [x] Performance-Metriken (Win Rate, PnL, Drawdown, Profit Factor)
+- [x] Stop-Loss/Take-Profit im Backtesting
+- [x] API-Endpunkt: `POST /api/backtest`
+- [x] Detaillierte Trade-Historie
 
-#### **4. Strategie-Variationen**
+**Performance-Metriken:**
+- Win Rate (%)
+- Total PnL (USDT)
+- Return (%)
+- Max Drawdown (%)
+- Profit Factor
+- Durchschnittlicher Gewinn/Verlust
+- Trade-Historie
+
+#### **4. Strategie-Variationen** ✅
 ```javascript
-// Verschiedene Strategien pro Coin
-strategies: [
-  { name: 'Aggressive MA', ma_short: 5, ma_long: 15 },
-  { name: 'Conservative MA', ma_short: 50, ma_long: 200 }
-]
+// Implementiert: Performance-Tracking für alle Strategien
+const performance = await calculateStrategyPerformance();
+// API: GET /api/strategy-performance
 ```
 
-**Aufgaben:**
-- [ ] Mehrere Strategien pro Coin
-- [ ] Strategie-Performance-Vergleich
-- [ ] Auto-Switching (optional)
+**Erledigt:**
+- [x] Performance-Vergleich (`calculateStrategyPerformance()`)
+- [x] API-Endpunkt: `GET /api/strategy-performance`
+- [x] Metriken pro Strategie (Win Rate, Total PnL, Avg PnL)
+- [x] Mehrere Strategien pro Coin bereits möglich (Phase 2)
 
-### **Geschätzte Dauer:** 2-3 Wochen
+**Performance-Metriken pro Strategie:**
+- Total Trades
+- Win Count / Loss Count
+- Win Rate (%)
+- Total PnL (USDT)
+- Average PnL (USDT)
+- Return (%)
 
-### **Priorität:** ⚡ **MITTEL**
+### **Geschätzte Dauer:** ✅ Abgeschlossen (15. Januar 2025)
+
+### **Priorität:** ✅ **ABGESCHLOSSEN**
+
+**Neue API-Endpunkte:**
+- `POST /api/backtest` - Backtesting durchführen
+- `GET /api/strategy-performance` - Strategie-Performance abfragen
+
+**Neue Dependencies:**
+- `ccxt` (v4.1.0) - Für historische Marktdaten
+
+**SQL-Script:**
+- `phase3_indicators_config.sql` - Konfiguration für alle neuen Features
 
 ---
 
@@ -369,11 +409,12 @@ Schönes Web-Interface zur Bot-Steuerung und Monitoring.
 
 ---
 
-**Nächster Schritt:** Phase 3 starten (Stop-Loss/Take-Profit) oder Multi-Coin Testing mit mehreren Coins gleichzeitig
+**Nächster Schritt:** Phase 4 starten (Frontend-Dashboard) oder Multi-Coin Testing mit mehreren Coins gleichzeitig
 
 ---
 
 *Erstellt: 14. Januar 2025*  
-*Letzte Aktualisierung: 14. Januar 2025*  
-*Phase 2 abgeschlossen: 14. Januar 2025*
+*Letzte Aktualisierung: 15. Januar 2025*  
+*Phase 2 abgeschlossen: 14. Januar 2025*  
+*Phase 3 abgeschlossen: 15. Januar 2025*
 

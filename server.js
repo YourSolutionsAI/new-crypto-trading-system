@@ -4,6 +4,7 @@ const cors = require('cors');
 const WebSocket = require('ws');
 const { createClient } = require('@supabase/supabase-js');
 const Binance = require('binance-api-node').default;
+const ccxt = require('ccxt');
 
 // Express-Server initialisieren
 const app = express();
@@ -122,6 +123,426 @@ app.post('/api/stop-bot', (req, res) => {
     });
   }
 });
+
+/**
+ * POST /api/backtest
+ * Führt ein Backtesting für eine Strategie durch
+ */
+app.post('/api/backtest', async (req, res) => {
+  try {
+    const { strategyId, symbol, startDate, endDate, timeframe = '1h' } = req.body;
+
+    if (!strategyId || !symbol) {
+      return res.status(400).json({
+        success: false,
+        message: 'strategyId und symbol sind erforderlich'
+      });
+    }
+
+    // Lade Strategie aus Supabase
+    const { data: strategy, error: strategyError } = await supabase
+      .from('strategies')
+      .select('*')
+      .eq('id', strategyId)
+      .single();
+
+    if (strategyError || !strategy) {
+      return res.status(404).json({
+        success: false,
+        message: 'Strategie nicht gefunden'
+      });
+    }
+
+    // Führe Backtest durch
+    const results = await runBacktest(strategy, symbol, startDate, endDate, timeframe);
+
+    res.json({
+      success: true,
+      results: results
+    });
+  } catch (error) {
+    console.error('Fehler beim Backtesting:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Backtesting',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/strategy-performance
+ * Gibt Performance-Metriken für alle Strategien zurück
+ */
+app.get('/api/strategy-performance', async (req, res) => {
+  try {
+    const performance = await calculateStrategyPerformance();
+    res.json({
+      success: true,
+      performance: performance
+    });
+  } catch (error) {
+    console.error('Fehler beim Laden der Performance:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Laden der Performance',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Gibt alle Strategien zurück
+ */
+app.get('/api/strategies', async (req, res) => {
+  try {
+    const { data: strategies, error } = await supabase
+      .from('strategies')
+      .select('*')
+      .order('symbol', { ascending: true });
+
+    if (error) throw error;
+
+    // Erweitere Strategien mit Performance-Daten
+    const strategiesWithPerf = await Promise.all(strategies.map(async (strategy) => {
+      const { data: trades } = await supabase
+        .from('trades')
+        .select('*')
+        .eq('strategy_id', strategy.id);
+      
+      const totalTrades = trades?.length || 0;
+      const profitableTrades = trades?.filter(t => t.pnl && t.pnl > 0).length || 0;
+      const totalPnl = trades?.reduce((sum, t) => sum + (t.pnl || 0), 0) || 0;
+      const winRate = totalTrades > 0 ? (profitableTrades / totalTrades) * 100 : 0;
+
+      return {
+        ...strategy,
+        total_trades: totalTrades,
+        profitable_trades: profitableTrades,
+        total_pnl: totalPnl,
+        win_rate: winRate
+      };
+    }));
+
+    res.json({ 
+      success: true, 
+      strategies: strategiesWithPerf 
+    });
+  } catch (error) {
+    console.error('Fehler beim Laden der Strategien:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Laden der Strategien',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Aktualisiert eine Strategie
+ */
+app.put('/api/strategies/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const updates = req.body;
+
+    const { data: strategy, error } = await supabase
+      .from('strategies')
+      .update(updates)
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ 
+      success: true, 
+      strategy 
+    });
+  } catch (error) {
+    console.error('Fehler beim Aktualisieren der Strategie:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Aktualisieren der Strategie',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Toggle Strategie aktiv/inaktiv
+ */
+app.patch('/api/strategies/:id/toggle', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { is_active } = req.body;
+
+    const { data: strategy, error } = await supabase
+      .from('strategies')
+      .update({ is_active })
+      .eq('id', id)
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ 
+      success: true, 
+      strategy 
+    });
+  } catch (error) {
+    console.error('Fehler beim Toggle der Strategie:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Toggle der Strategie',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Gibt Trades zurück
+ */
+app.get('/api/trades', async (req, res) => {
+  try {
+    const { limit = 50, offset = 0 } = req.query;
+
+    const { data: trades, error } = await supabase
+      .from('trades')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(parseInt(limit))
+      .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
+
+    if (error) throw error;
+
+    res.json({ 
+      success: true, 
+      trades: trades || []
+    });
+  } catch (error) {
+    console.error('Fehler beim Laden der Trades:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Laden der Trades',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Gibt offene Positionen zurück
+ */
+app.get('/api/positions', async (req, res) => {
+  try {
+    // Konvertiere Map zu Array für API Response
+    const positionsArray = Array.from(openPositions.values()).map(position => ({
+      id: position.id,
+      symbol: position.symbol,
+      quantity: position.quantity,
+      entryPrice: position.entryPrice,
+      currentPrice: position.currentPrice || position.entryPrice,
+      pnl: position.pnl || 0,
+      pnlPercent: position.entryPrice > 0 
+        ? ((position.currentPrice - position.entryPrice) / position.entryPrice) * 100 
+        : 0,
+      createdAt: position.createdAt,
+      duration: formatDuration(position.createdAt)
+    }));
+
+    res.json({ 
+      success: true, 
+      positions: positionsArray 
+    });
+  } catch (error) {
+    console.error('Fehler beim Laden der Positionen:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Laden der Positionen',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Gibt Performance-Metriken zurück
+ */
+app.get('/api/performance', async (req, res) => {
+  try {
+    // Lade alle Trades
+    const { data: allTrades, error } = await supabase
+      .from('trades')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (error) throw error;
+
+    // Berechne Metriken
+    const trades = allTrades || [];
+    const totalTrades = trades.length;
+    const profitableTrades = trades.filter(t => t.pnl && t.pnl > 0);
+    const losingTrades = trades.filter(t => t.pnl && t.pnl < 0);
+    
+    const totalPnL = trades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+    const winRate = totalTrades > 0 ? (profitableTrades.length / totalTrades) * 100 : 0;
+    
+    const avgWin = profitableTrades.length > 0 
+      ? profitableTrades.reduce((sum, t) => sum + t.pnl, 0) / profitableTrades.length 
+      : 0;
+    
+    const avgLoss = losingTrades.length > 0 
+      ? Math.abs(losingTrades.reduce((sum, t) => sum + t.pnl, 0) / losingTrades.length)
+      : 0;
+
+    const profitFactor = avgLoss > 0 ? avgWin / avgLoss : 0;
+
+    // Berechne heute PnL
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const todayTrades = trades.filter(t => new Date(t.created_at) >= today);
+    const todayPnL = todayTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+
+    // Berechne Max Drawdown (vereinfacht)
+    let runningPnL = 0;
+    let peak = 0;
+    let maxDrawdown = 0;
+    
+    trades.reverse().forEach(trade => {
+      runningPnL += trade.pnl || 0;
+      if (runningPnL > peak) peak = runningPnL;
+      const drawdown = peak - runningPnL;
+      if (drawdown > maxDrawdown) maxDrawdown = drawdown;
+    });
+
+    const maxDrawdownPercent = peak > 0 ? (maxDrawdown / peak) * 100 : 0;
+
+    res.json({
+      success: true,
+      performance: {
+        totalPnL,
+        todayPnL,
+        weekPnL: totalPnL * 0.3, // Placeholder - sollte richtig berechnet werden
+        monthPnL: totalPnL * 0.7, // Placeholder - sollte richtig berechnet werden
+        totalTrades,
+        winRate,
+        avgWin,
+        avgLoss,
+        profitFactor,
+        maxDrawdown: maxDrawdownPercent
+      }
+    });
+  } catch (error) {
+    console.error('Fehler beim Berechnen der Performance:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Berechnen der Performance',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * GET /api/market/prices - Aktuelle Marktpreise abrufen
+ */
+app.get('/api/market/prices', async (req, res) => {
+  try {
+    const { symbols } = req.query;
+    const symbolList = symbols ? symbols.split(',') : [];
+    
+    const prices = {};
+    
+    // Preise aus dem priceHistories Map holen
+    for (const symbol of symbolList) {
+      const history = priceHistories.get(symbol);
+      if (history && history.length > 0) {
+        prices[symbol] = history[history.length - 1];
+      }
+    }
+
+    res.json({
+      success: true,
+      prices: prices
+    });
+  } catch (error) {
+    console.error('Fehler beim Abrufen der Marktpreise:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Interner Serverfehler'
+    });
+  }
+});
+
+// ═══════════════════════════════════════════════
+// WEBSOCKET SETUP
+// ═══════════════════════════════════════════════
+
+const wss = new WebSocket.Server({ noServer: true });
+
+// WebSocket Clients verwalten
+const wsClients = new Set();
+
+// WebSocket Message an alle Clients senden
+function broadcastToClients(message) {
+  const data = JSON.stringify(message);
+  wsClients.forEach(client => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(data);
+    }
+  });
+}
+
+wss.on('connection', (ws) => {
+  console.log('Neuer WebSocket Client verbunden');
+  wsClients.add(ws);
+  
+  // Sende initialen Status
+  ws.send(JSON.stringify({
+    type: 'status',
+    data: {
+      status: botStatus,
+      timestamp: new Date().toISOString(),
+      tradingBotProcessCount: tradingBotProcess.size,
+      activeStrategies: activeStrategies.length
+    }
+  }));
+
+  ws.on('close', () => {
+    console.log('WebSocket Client getrennt');
+    wsClients.delete(ws);
+  });
+
+  ws.on('error', (error) => {
+    console.error('WebSocket Fehler:', error);
+    wsClients.delete(ws);
+  });
+
+  ws.on('message', (message) => {
+    try {
+      const data = JSON.parse(message);
+      // Hier können wir auf Client-Messages reagieren, wenn nötig
+      console.log('WebSocket Message erhalten:', data);
+    } catch (error) {
+      console.error('Fehler beim Parsen der WebSocket-Nachricht:', error);
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════
+// UTILITY FUNCTIONS
+// ═══════════════════════════════════════════════
+
+function formatDuration(createdAt) {
+  const start = new Date(createdAt).getTime();
+  const duration = Date.now() - start;
+  
+  const days = Math.floor(duration / (1000 * 60 * 60 * 24));
+  const hours = Math.floor((duration % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const minutes = Math.floor((duration % (1000 * 60 * 60)) / (1000 * 60));
+  
+  if (days > 0) return `${days}d ${hours}h`;
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
 
 // ═══════════════════════════════════════════════
 // TRADING-LOGIK FUNKTIONEN
@@ -504,22 +925,189 @@ function calculateMA(priceHistory, period) {
 }
 
 /**
- * Generiert Trading-Signale basierend auf MA Crossover
+ * Berechnet den RSI (Relative Strength Index)
+ * @param {number[]} priceHistory - Die Preis-Historie
+ * @param {number} period - RSI-Periode (Standard: 14)
+ * @returns {number|null} RSI-Wert zwischen 0 und 100
+ */
+function calculateRSI(priceHistory, period = 14) {
+  if (!priceHistory || priceHistory.length < period + 1) {
+    return null;
+  }
+
+  const changes = [];
+  for (let i = 1; i < priceHistory.length; i++) {
+    changes.push(priceHistory[i] - priceHistory[i - 1]);
+  }
+
+  const recentChanges = changes.slice(-period);
+  const gains = recentChanges.filter(c => c > 0);
+  const losses = recentChanges.filter(c => c < 0).map(c => Math.abs(c));
+
+  const avgGain = gains.length > 0 ? gains.reduce((a, b) => a + b, 0) / period : 0;
+  const avgLoss = losses.length > 0 ? losses.reduce((a, b) => a + b, 0) / period : 0;
+
+  if (avgLoss === 0) {
+    return 100; // Perfekter Bullenmarkt
+  }
+
+  const rs = avgGain / avgLoss;
+  const rsi = 100 - (100 / (1 + rs));
+
+  return rsi;
+}
+
+/**
+ * Berechnet den MACD (Moving Average Convergence Divergence)
+ * @param {number[]} priceHistory - Die Preis-Historie
+ * @param {number} fastPeriod - Schnelle EMA-Periode (Standard: 12)
+ * @param {number} slowPeriod - Langsame EMA-Periode (Standard: 26)
+ * @param {number} signalPeriod - Signal-Linie Periode (Standard: 9)
+ * @returns {Object|null} { macd, signal, histogram }
+ */
+function calculateMACD(priceHistory, fastPeriod = 12, slowPeriod = 26, signalPeriod = 9) {
+  if (!priceHistory || priceHistory.length < slowPeriod + signalPeriod) {
+    return null;
+  }
+
+  // EMA berechnen
+  function calculateEMA(prices, period) {
+    const multiplier = 2 / (period + 1);
+    let ema = prices.slice(0, period).reduce((a, b) => a + b, 0) / period;
+
+    for (let i = period; i < prices.length; i++) {
+      ema = (prices[i] - ema) * multiplier + ema;
+    }
+
+    return ema;
+  }
+
+  const fastEMA = calculateEMA(priceHistory, fastPeriod);
+  const slowEMA = calculateEMA(priceHistory, slowPeriod);
+  const macdLine = fastEMA - slowEMA;
+
+  // MACD-Historie für Signal-Linie berechnen
+  const macdHistory = [];
+  for (let i = slowPeriod; i < priceHistory.length; i++) {
+    const fast = calculateEMA(priceHistory.slice(0, i + 1), fastPeriod);
+    const slow = calculateEMA(priceHistory.slice(0, i + 1), slowPeriod);
+    macdHistory.push(fast - slow);
+  }
+
+  const signalLine = macdHistory.length >= signalPeriod
+    ? calculateEMA(macdHistory, signalPeriod)
+    : macdLine;
+
+  const histogram = macdLine - signalLine;
+
+  return {
+    macd: macdLine,
+    signal: signalLine,
+    histogram: histogram
+  };
+}
+
+/**
+ * Berechnet Bollinger Bands
+ * @param {number[]} priceHistory - Die Preis-Historie
+ * @param {number} period - Periode für MA (Standard: 20)
+ * @param {number} stdDev - Standardabweichung Multiplikator (Standard: 2)
+ * @returns {Object|null} { upper, middle, lower }
+ */
+function calculateBollingerBands(priceHistory, period = 20, stdDev = 2) {
+  if (!priceHistory || priceHistory.length < period) {
+    return null;
+  }
+
+  const slice = priceHistory.slice(-period);
+  const ma = calculateMA(priceHistory, period);
+
+  // Standardabweichung berechnen
+  const variance = slice.reduce((sum, price) => {
+    return sum + Math.pow(price - ma, 2);
+  }, 0) / period;
+
+  const standardDeviation = Math.sqrt(variance);
+
+  return {
+    upper: ma + (stdDev * standardDeviation),
+    middle: ma,
+    lower: ma - (stdDev * standardDeviation)
+  };
+}
+
+/**
+ * Berechnet den Stochastic Oscillator
+ * @param {number[]} highPrices - Höchstpreise
+ * @param {number[]} lowPrices - Tiefstpreise
+ * @param {number[]} closePrices - Schlusspreise
+ * @param {number} period - Periode (Standard: 14)
+ * @returns {Object|null} { k, d } - %K und %D Werte
+ */
+function calculateStochastic(highPrices, lowPrices, closePrices, period = 14) {
+  if (!highPrices || !lowPrices || !closePrices || 
+      highPrices.length < period || lowPrices.length < period || closePrices.length < period) {
+    return null;
+  }
+
+  const recentHighs = highPrices.slice(-period);
+  const recentLows = lowPrices.slice(-period);
+  const currentClose = closePrices[closePrices.length - 1];
+
+  const highestHigh = Math.max(...recentHighs);
+  const lowestLow = Math.min(...recentLows);
+
+  if (highestHigh === lowestLow) {
+    return { k: 50, d: 50 }; // Neutral wenn keine Volatilität
+  }
+
+  const k = ((currentClose - lowestLow) / (highestHigh - lowestLow)) * 100;
+
+  // %D ist der gleitende Durchschnitt von %K (vereinfacht: aktueller Wert)
+  const d = k;
+
+  return { k, d };
+}
+
+/**
+ * Berechnet den Exponential Moving Average (EMA)
+ * @param {number[]} priceHistory - Die Preis-Historie
+ * @param {number} period - EMA-Periode
+ * @returns {number|null} EMA-Wert
+ */
+function calculateEMA(priceHistory, period) {
+  if (!priceHistory || priceHistory.length < period) {
+    return null;
+  }
+
+  const multiplier = 2 / (period + 1);
+  let ema = priceHistory.slice(0, period).reduce((a, b) => a + b, 0) / period;
+
+  for (let i = period; i < priceHistory.length; i++) {
+    ema = (priceHistory[i] - ema) * multiplier + ema;
+  }
+
+  return ema;
+}
+
+/**
+ * Generiert Trading-Signale basierend auf MA Crossover und weiteren Indikatoren
  * @param {number} currentPrice - Der aktuelle Preis
  * @param {Object} strategy - Die Trading-Strategie
  * @param {number[]} priceHistory - Die symbol-spezifische Preis-Historie
  */
 function generateSignal(currentPrice, strategy, priceHistory) {
   const config = strategy.config;
-  const maShortPeriod = config.indicators.ma_short || 20;
-  const maLongPeriod = config.indicators.ma_long || 50;
+  const maShortPeriod = config.indicators?.ma_short || 20;
+  const maLongPeriod = config.indicators?.ma_long || 50;
 
   // Prüfen ob genug Daten vorhanden
-  if (!priceHistory || priceHistory.length < maLongPeriod) {
+  const requiredData = Math.max(maLongPeriod, config.indicators?.rsi_period || 0, config.indicators?.macd_slow_period || 0);
+  if (!priceHistory || priceHistory.length < requiredData) {
     return {
       action: 'wait',
-      reason: `Sammle Daten... ${priceHistory ? priceHistory.length : 0}/${maLongPeriod}`,
-      progress: Math.round(((priceHistory ? priceHistory.length : 0) / maLongPeriod) * 100)
+      reason: `Sammle Daten... ${priceHistory ? priceHistory.length : 0}/${requiredData}`,
+      progress: Math.round(((priceHistory ? priceHistory.length : 0) / requiredData) * 100)
     };
   }
 
@@ -544,17 +1132,116 @@ function generateSignal(currentPrice, strategy, priceHistory) {
     };
   }
 
+  // Zusätzliche Indikatoren berechnen
+  const indicators = {
+    rsi: null,
+    macd: null,
+    bollinger: null,
+    stochastic: null
+  };
+
+  // RSI berechnen (wenn aktiviert)
+  if (config.indicators?.rsi_period) {
+    indicators.rsi = calculateRSI(priceHistory, config.indicators.rsi_period || 14);
+  }
+
+  // MACD berechnen (wenn aktiviert)
+  if (config.indicators?.macd_fast_period) {
+    indicators.macd = calculateMACD(
+      priceHistory,
+      config.indicators.macd_fast_period || 12,
+      config.indicators.macd_slow_period || 26,
+      config.indicators.macd_signal_period || 9
+    );
+  }
+
+  // Bollinger Bands berechnen (wenn aktiviert)
+  if (config.indicators?.bollinger_period) {
+    indicators.bollinger = calculateBollingerBands(
+      priceHistory,
+      config.indicators.bollinger_period || 20,
+      config.indicators.bollinger_std_dev || 2
+    );
+  }
+
+  // Signal-Confidence basierend auf Indikatoren berechnen
+  let confidence = Math.min(Math.abs(differencePercent) * 10, 100);
+  let additionalReasons = [];
+
+  // RSI-Filter
+  if (indicators.rsi !== null) {
+    const rsiOverbought = config.indicators?.rsi_overbought || 70;
+    const rsiOversold = config.indicators?.rsi_oversold || 30;
+
+    if (indicators.rsi > rsiOverbought) {
+      additionalReasons.push(`RSI überkauft (${indicators.rsi.toFixed(1)})`);
+      if (differencePercent > threshold) {
+        confidence *= 0.7; // Reduziere Confidence bei überkauftem Markt für BUY
+      }
+    } else if (indicators.rsi < rsiOversold) {
+      additionalReasons.push(`RSI überverkauft (${indicators.rsi.toFixed(1)})`);
+      if (differencePercent < -threshold) {
+        confidence *= 0.7; // Reduziere Confidence bei überverkauftem Markt für SELL
+      }
+    }
+  }
+
+  // MACD-Filter
+  if (indicators.macd !== null) {
+    if (indicators.macd.macd > indicators.macd.signal) {
+      additionalReasons.push(`MACD bullish`);
+      if (differencePercent > threshold) {
+        confidence *= 1.1; // Erhöhe Confidence bei bullish MACD
+      }
+    } else {
+      additionalReasons.push(`MACD bearish`);
+      if (differencePercent < -threshold) {
+        confidence *= 1.1; // Erhöhe Confidence bei bearish MACD
+      }
+    }
+  }
+
+  // Bollinger Bands Filter
+  if (indicators.bollinger !== null) {
+    if (currentPrice < indicators.bollinger.lower) {
+      additionalReasons.push(`Preis unter unterem Band`);
+      if (differencePercent > threshold) {
+        confidence *= 1.15; // Starke Unterstützung
+      }
+    } else if (currentPrice > indicators.bollinger.upper) {
+      additionalReasons.push(`Preis über oberem Band`);
+      if (differencePercent < -threshold) {
+        confidence *= 1.15; // Starker Widerstand
+      }
+    }
+  }
+
+  confidence = Math.min(confidence, 100);
+
   // Kauf-Signal: Kurzer MA über langem MA (Bullish)
   if (differencePercent > threshold) {
     return {
       action: 'buy',
       price: currentPrice,
-      reason: `MA Crossover Bullish: MA${maShortPeriod}=${maShort.toFixed(2)} > MA${maLongPeriod}=${maLong.toFixed(2)}`,
+      reason: `MA Crossover Bullish: MA${maShortPeriod}=${maShort.toFixed(2)} > MA${maLongPeriod}=${maLong.toFixed(2)}${additionalReasons.length > 0 ? ' | ' + additionalReasons.join(', ') : ''}`,
       maShort: maShort.toFixed(2),
       maLong: maLong.toFixed(2),
       difference: difference.toFixed(2),
       differencePercent: differencePercent.toFixed(3),
-      confidence: Math.min(Math.abs(differencePercent) * 10, 100).toFixed(1)
+      confidence: confidence.toFixed(1),
+      indicators: {
+        rsi: indicators.rsi ? indicators.rsi.toFixed(2) : null,
+        macd: indicators.macd ? {
+          macd: indicators.macd.macd.toFixed(4),
+          signal: indicators.macd.signal.toFixed(4),
+          histogram: indicators.macd.histogram.toFixed(4)
+        } : null,
+        bollinger: indicators.bollinger ? {
+          upper: indicators.bollinger.upper.toFixed(2),
+          middle: indicators.bollinger.middle.toFixed(2),
+          lower: indicators.bollinger.lower.toFixed(2)
+        } : null
+      }
     };
   }
 
@@ -563,12 +1250,25 @@ function generateSignal(currentPrice, strategy, priceHistory) {
     return {
       action: 'sell',
       price: currentPrice,
-      reason: `MA Crossover Bearish: MA${maShortPeriod}=${maShort.toFixed(2)} < MA${maLongPeriod}=${maLong.toFixed(2)}`,
+      reason: `MA Crossover Bearish: MA${maShortPeriod}=${maShort.toFixed(2)} < MA${maLongPeriod}=${maLong.toFixed(2)}${additionalReasons.length > 0 ? ' | ' + additionalReasons.join(', ') : ''}`,
       maShort: maShort.toFixed(2),
       maLong: maLong.toFixed(2),
       difference: difference.toFixed(2),
       differencePercent: differencePercent.toFixed(3),
-      confidence: Math.min(Math.abs(differencePercent) * 10, 100).toFixed(1)
+      confidence: confidence.toFixed(1),
+      indicators: {
+        rsi: indicators.rsi ? indicators.rsi.toFixed(2) : null,
+        macd: indicators.macd ? {
+          macd: indicators.macd.macd.toFixed(4),
+          signal: indicators.macd.signal.toFixed(4),
+          histogram: indicators.macd.histogram.toFixed(4)
+        } : null,
+        bollinger: indicators.bollinger ? {
+          upper: indicators.bollinger.upper.toFixed(2),
+          middle: indicators.bollinger.middle.toFixed(2),
+          lower: indicators.bollinger.lower.toFixed(2)
+        } : null
+      }
     };
   }
 
@@ -579,7 +1279,20 @@ function generateSignal(currentPrice, strategy, priceHistory) {
     maShort: maShort.toFixed(2),
     maLong: maLong.toFixed(2),
     difference: difference.toFixed(2),
-    differencePercent: differencePercent.toFixed(3)
+    differencePercent: differencePercent.toFixed(3),
+    indicators: {
+      rsi: indicators.rsi ? indicators.rsi.toFixed(2) : null,
+      macd: indicators.macd ? {
+        macd: indicators.macd.macd.toFixed(4),
+        signal: indicators.macd.signal.toFixed(4),
+        histogram: indicators.macd.histogram.toFixed(4)
+      } : null,
+      bollinger: indicators.bollinger ? {
+        upper: indicators.bollinger.upper.toFixed(2),
+        middle: indicators.bollinger.middle.toFixed(2),
+        lower: indicators.bollinger.lower.toFixed(2)
+      } : null
+    }
   };
 }
 
@@ -608,6 +1321,125 @@ function analyzePrice(currentPrice, strategy) {
 
   // Signal generieren mit symbol-spezifischer Historie
   return generateSignal(currentPrice, strategy, priceHistory);
+}
+
+/**
+ * Prüft offene Positionen auf Stop-Loss und Take-Profit
+ * @param {number} currentPrice - Der aktuelle Preis
+ * @param {string} symbol - Das Trading-Symbol
+ */
+async function checkStopLossTakeProfit(currentPrice, symbol) {
+  // Prüfe alle offenen Positionen für dieses Symbol
+  for (const [positionKey, position] of openPositions.entries()) {
+    if (position.symbol !== symbol) continue;
+
+    // Finde die zugehörige Strategie
+    const strategy = activeStrategies.find(s => s.id === position.strategyId);
+    if (!strategy) {
+      console.warn(`⚠️  Keine Strategie gefunden für Position ${positionKey}`);
+      continue;
+    }
+
+    // Hole Stop-Loss und Take-Profit aus Strategie-Config
+    const stopLossPercent = strategy.config.risk?.stop_loss_percent || 0;
+    const takeProfitPercent = strategy.config.risk?.take_profit_percent || 0;
+
+    // Wenn beide deaktiviert sind, überspringe
+    if (stopLossPercent === 0 && takeProfitPercent === 0) {
+      continue;
+    }
+
+    // Berechne Preisänderung in Prozent
+    const priceChangePercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
+
+    // Stop-Loss prüfen
+    if (stopLossPercent > 0 && priceChangePercent <= -stopLossPercent) {
+      console.log('');
+      console.log('═══════════════════════════════════════════════');
+      console.log(`🛑 STOP-LOSS AUSGELÖST [${symbol}]`);
+      console.log('═══════════════════════════════════════════════');
+      console.log(`📊 Position: ${positionKey}`);
+      console.log(`💰 Entry Price: ${position.entryPrice.toFixed(6)} USDT`);
+      console.log(`📉 Current Price: ${currentPrice.toFixed(6)} USDT`);
+      console.log(`📊 Preisänderung: ${priceChangePercent.toFixed(2)}%`);
+      console.log(`🛑 Stop-Loss Limit: -${stopLossPercent}%`);
+      console.log('═══════════════════════════════════════════════');
+      console.log('');
+
+      await logBotEvent('warning', `Stop-Loss ausgelöst: ${symbol}`, {
+        positionKey: positionKey,
+        entryPrice: position.entryPrice,
+        currentPrice: currentPrice,
+        priceChangePercent: priceChangePercent,
+        stopLossPercent: stopLossPercent,
+        symbol: symbol,
+        strategy_id: strategy.id
+      });
+
+      // Erstelle SELL-Signal für Stop-Loss
+      const stopLossSignal = {
+        action: 'sell',
+        price: currentPrice,
+        reason: `Stop-Loss ausgelöst: ${priceChangePercent.toFixed(2)}% <= -${stopLossPercent}%`,
+        stopLoss: true,
+        takeProfit: false,
+        _positionData: position
+      };
+
+      // Position SOFORT entfernen, um Race-Conditions zu vermeiden
+      openPositions.delete(positionKey);
+
+      // Trade ausführen
+      if (tradingEnabled && binanceClient) {
+        await executeTrade(stopLossSignal, strategy);
+      }
+
+      continue;
+    }
+
+    // Take-Profit prüfen
+    if (takeProfitPercent > 0 && priceChangePercent >= takeProfitPercent) {
+      console.log('');
+      console.log('═══════════════════════════════════════════════');
+      console.log(`🎯 TAKE-PROFIT AUSGELÖST [${symbol}]`);
+      console.log('═══════════════════════════════════════════════');
+      console.log(`📊 Position: ${positionKey}`);
+      console.log(`💰 Entry Price: ${position.entryPrice.toFixed(6)} USDT`);
+      console.log(`📈 Current Price: ${currentPrice.toFixed(6)} USDT`);
+      console.log(`📊 Preisänderung: ${priceChangePercent.toFixed(2)}%`);
+      console.log(`🎯 Take-Profit Limit: +${takeProfitPercent}%`);
+      console.log('═══════════════════════════════════════════════');
+      console.log('');
+
+      await logBotEvent('info', `Take-Profit ausgelöst: ${symbol}`, {
+        positionKey: positionKey,
+        entryPrice: position.entryPrice,
+        currentPrice: currentPrice,
+        priceChangePercent: priceChangePercent,
+        takeProfitPercent: takeProfitPercent,
+        symbol: symbol,
+        strategy_id: strategy.id
+      });
+
+      // Erstelle SELL-Signal für Take-Profit
+      const takeProfitSignal = {
+        action: 'sell',
+        price: currentPrice,
+        reason: `Take-Profit ausgelöst: ${priceChangePercent.toFixed(2)}% >= +${takeProfitPercent}%`,
+        stopLoss: false,
+        takeProfit: true,
+        _positionData: position
+      };
+
+      // Position SOFORT entfernen, um Race-Conditions zu vermeiden
+      openPositions.delete(positionKey);
+
+      // Trade ausführen
+      if (tradingEnabled && binanceClient) {
+        await executeTrade(takeProfitSignal, strategy);
+      }
+    }
+  }
 }
 
 /**
@@ -1181,6 +2013,298 @@ async function logTradeError(error, signal, strategy) {
 }
 
 // ═══════════════════════════════════════════════
+// PHASE 3: BACKTESTING-SYSTEM
+// ═══════════════════════════════════════════════
+
+/**
+ * Führt ein Backtesting für eine Strategie durch
+ * @param {Object} strategy - Die Trading-Strategie
+ * @param {string} symbol - Das Trading-Symbol
+ * @param {string} startDate - Startdatum (ISO-String)
+ * @param {string} endDate - Enddatum (ISO-String)
+ * @param {string} timeframe - Zeitrahmen (z.B. '1h', '4h', '1d')
+ * @returns {Object} Backtesting-Ergebnisse
+ */
+async function runBacktest(strategy, symbol, startDate, endDate, timeframe = '1h') {
+  try {
+    console.log(`🔄 Starte Backtesting für ${strategy.name} (${symbol})...`);
+    console.log(`   Zeitraum: ${startDate} bis ${endDate}`);
+    console.log(`   Zeitrahmen: ${timeframe}`);
+
+    // CCXT Exchange initialisieren
+    const exchange = new ccxt.binance({
+      enableRateLimit: true,
+      sandbox: false // Verwende echte Daten für Backtesting
+    });
+
+    // Historische Daten laden
+    const since = new Date(startDate).getTime();
+    const until = new Date(endDate).getTime();
+    
+    const ohlcv = await exchange.fetchOHLCV(symbol, timeframe, since, undefined, {
+      limit: 1000
+    });
+
+    if (!ohlcv || ohlcv.length === 0) {
+      throw new Error('Keine historischen Daten gefunden');
+    }
+
+    console.log(`   📊 ${ohlcv.length} Kerzen geladen`);
+
+    // Backtesting durchführen
+    const priceHistory = [];
+    let position = null;
+    const trades = [];
+    let totalPnl = 0;
+    let winCount = 0;
+    let lossCount = 0;
+    let maxDrawdown = 0;
+    let peakBalance = 1000; // Startkapital
+    let currentBalance = 1000;
+
+    for (let i = 0; i < ohlcv.length; i++) {
+      const [timestamp, open, high, low, close, volume] = ohlcv[i];
+      const currentPrice = close;
+
+      // Preis zur Historie hinzufügen
+      priceHistory.push(currentPrice);
+
+      // Signal generieren
+      const signal = generateSignal(currentPrice, strategy, priceHistory);
+
+      if (!signal || signal.action === 'wait' || signal.action === 'hold' || signal.action === 'error') {
+        continue;
+      }
+
+      // Stop-Loss & Take-Profit prüfen (wenn Position offen)
+      if (position) {
+        const priceChangePercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
+        const stopLossPercent = strategy.config.risk?.stop_loss_percent || 0;
+        const takeProfitPercent = strategy.config.risk?.take_profit_percent || 0;
+
+        if (stopLossPercent > 0 && priceChangePercent <= -stopLossPercent) {
+          // Stop-Loss ausgelöst
+          const pnl = (currentPrice - position.entryPrice) * position.quantity;
+          totalPnl += pnl;
+          currentBalance += pnl;
+          
+          trades.push({
+            entryPrice: position.entryPrice,
+            exitPrice: currentPrice,
+            quantity: position.quantity,
+            pnl: pnl,
+            pnlPercent: priceChangePercent,
+            reason: 'stop_loss',
+            timestamp: timestamp
+          });
+
+          if (pnl > 0) winCount++;
+          else lossCount++;
+
+          position = null;
+          continue;
+        }
+
+        if (takeProfitPercent > 0 && priceChangePercent >= takeProfitPercent) {
+          // Take-Profit ausgelöst
+          const pnl = (currentPrice - position.entryPrice) * position.quantity;
+          totalPnl += pnl;
+          currentBalance += pnl;
+          
+          trades.push({
+            entryPrice: position.entryPrice,
+            exitPrice: currentPrice,
+            quantity: position.quantity,
+            pnl: pnl,
+            pnlPercent: priceChangePercent,
+            reason: 'take_profit',
+            timestamp: timestamp
+          });
+
+          if (pnl > 0) winCount++;
+          else lossCount++;
+
+          position = null;
+          continue;
+        }
+      }
+
+      // Trade ausführen basierend auf Signal
+      if (signal.action === 'buy' && !position) {
+        const tradeSize = strategy.config.risk?.max_trade_size_usdt || 100;
+        const quantity = tradeSize / currentPrice;
+        
+        position = {
+          entryPrice: currentPrice,
+          quantity: quantity,
+          timestamp: timestamp
+        };
+      } else if (signal.action === 'sell' && position) {
+        const pnl = (currentPrice - position.entryPrice) * position.quantity;
+        const pnlPercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
+        
+        totalPnl += pnl;
+        currentBalance += pnl;
+
+        trades.push({
+          entryPrice: position.entryPrice,
+          exitPrice: currentPrice,
+          quantity: position.quantity,
+          pnl: pnl,
+          pnlPercent: pnlPercent,
+          reason: 'signal',
+          timestamp: timestamp
+        });
+
+        if (pnl > 0) winCount++;
+        else lossCount++;
+
+        position = null;
+      }
+
+      // Drawdown berechnen
+      if (currentBalance > peakBalance) {
+        peakBalance = currentBalance;
+      }
+      const drawdown = ((peakBalance - currentBalance) / peakBalance) * 100;
+      if (drawdown > maxDrawdown) {
+        maxDrawdown = drawdown;
+      }
+    }
+
+    // Schließe offene Position am Ende
+    if (position && ohlcv.length > 0) {
+      const lastPrice = ohlcv[ohlcv.length - 1][4];
+      const pnl = (lastPrice - position.entryPrice) * position.quantity;
+      const pnlPercent = ((lastPrice - position.entryPrice) / position.entryPrice) * 100;
+      
+      totalPnl += pnl;
+      currentBalance += pnl;
+
+      trades.push({
+        entryPrice: position.entryPrice,
+        exitPrice: lastPrice,
+        quantity: position.quantity,
+        pnl: pnl,
+        pnlPercent: pnlPercent,
+        reason: 'end_of_period',
+        timestamp: ohlcv[ohlcv.length - 1][0]
+      });
+
+      if (pnl > 0) winCount++;
+      else lossCount++;
+    }
+
+    // Performance-Metriken berechnen
+    const totalTrades = trades.length;
+    const winRate = totalTrades > 0 ? (winCount / totalTrades) * 100 : 0;
+    const avgWin = winCount > 0 ? trades.filter(t => t.pnl > 0).reduce((sum, t) => sum + t.pnl, 0) / winCount : 0;
+    const avgLoss = lossCount > 0 ? trades.filter(t => t.pnl < 0).reduce((sum, t) => sum + t.pnl, 0) / lossCount : 0;
+    const profitFactor = avgLoss !== 0 ? Math.abs(avgWin / avgLoss) : avgWin > 0 ? Infinity : 0;
+    const returnPercent = ((currentBalance - 1000) / 1000) * 100;
+
+    const results = {
+      strategyId: strategy.id,
+      strategyName: strategy.name,
+      symbol: symbol,
+      startDate: startDate,
+      endDate: endDate,
+      timeframe: timeframe,
+      totalTrades: totalTrades,
+      winCount: winCount,
+      lossCount: lossCount,
+      winRate: winRate.toFixed(2),
+      totalPnl: totalPnl.toFixed(2),
+      returnPercent: returnPercent.toFixed(2),
+      maxDrawdown: maxDrawdown.toFixed(2),
+      profitFactor: profitFactor.toFixed(2),
+      avgWin: avgWin.toFixed(2),
+      avgLoss: avgLoss.toFixed(2),
+      startBalance: 1000,
+      endBalance: currentBalance.toFixed(2),
+      trades: trades.slice(-50) // Nur die letzten 50 Trades zurückgeben
+    };
+
+    console.log(`✅ Backtesting abgeschlossen:`);
+    console.log(`   Trades: ${totalTrades} (${winCount} Gewinne, ${lossCount} Verluste)`);
+    console.log(`   Win Rate: ${winRate.toFixed(2)}%`);
+    console.log(`   Total PnL: ${totalPnl.toFixed(2)} USDT`);
+    console.log(`   Return: ${returnPercent.toFixed(2)}%`);
+
+    return results;
+  } catch (error) {
+    console.error('❌ Fehler beim Backtesting:', error);
+    throw error;
+  }
+}
+
+/**
+ * Berechnet Performance-Metriken für alle Strategien
+ * @returns {Array} Performance-Daten für jede Strategie
+ */
+async function calculateStrategyPerformance() {
+  try {
+    const strategies = await loadStrategies();
+    const performance = [];
+
+    for (const strategy of strategies) {
+      // Lade alle Trades für diese Strategie
+      const { data: trades, error } = await supabase
+        .from('trades')
+        .select('*')
+        .eq('strategy_id', strategy.id)
+        .eq('status', 'executed')
+        .order('executed_at', { ascending: true });
+
+      if (error) {
+        console.error(`❌ Fehler beim Laden der Trades für ${strategy.name}:`, error);
+        continue;
+      }
+
+      if (!trades || trades.length === 0) {
+        performance.push({
+          strategyId: strategy.id,
+          strategyName: strategy.name,
+          symbol: strategy.symbol,
+          totalTrades: 0,
+          winRate: 0,
+          totalPnl: 0,
+          returnPercent: 0
+        });
+        continue;
+      }
+
+      // Berechne Performance-Metriken
+      const sellTrades = trades.filter(t => t.side === 'sell' && t.pnl !== null);
+      const winCount = sellTrades.filter(t => t.pnl > 0).length;
+      const lossCount = sellTrades.filter(t => t.pnl < 0).length;
+      const totalTrades = sellTrades.length;
+      const winRate = totalTrades > 0 ? (winCount / totalTrades) * 100 : 0;
+      const totalPnl = sellTrades.reduce((sum, t) => sum + (t.pnl || 0), 0);
+      const avgPnl = totalTrades > 0 ? totalPnl / totalTrades : 0;
+
+      performance.push({
+        strategyId: strategy.id,
+        strategyName: strategy.name,
+        symbol: strategy.symbol,
+        totalTrades: totalTrades,
+        winCount: winCount,
+        lossCount: lossCount,
+        winRate: winRate.toFixed(2),
+        totalPnl: totalPnl.toFixed(2),
+        avgPnl: avgPnl.toFixed(2),
+        returnPercent: totalPnl > 0 ? ((totalPnl / 1000) * 100).toFixed(2) : '0.00'
+      });
+    }
+
+    return performance;
+  } catch (error) {
+    console.error('❌ Fehler beim Berechnen der Performance:', error);
+    throw error;
+  }
+}
+
+// ═══════════════════════════════════════════════
 // TRADING-BOT FUNKTIONEN
 // ═══════════════════════════════════════════════
 
@@ -1289,6 +2413,9 @@ async function createWebSocketConnection(symbol, strategies) {
         const priceDecimals = currentPrice < 1 ? 6 : 2;
         console.log(`💰 ${symbol}: ${currentPrice.toFixed(priceDecimals)} USDT | Vol: ${quantity.toFixed(2)}`);
       }
+
+      // PHASE 3: Stop-Loss & Take-Profit prüfen (bei jedem Preis-Update)
+      await checkStopLossTakeProfit(currentPrice, symbol);
 
       // Für jede Strategie dieses Symbols verarbeiten
       for (const strategy of strategiesForSymbol) {
@@ -1528,19 +2655,29 @@ function stopTradingBot() {
 const PORT = process.env.PORT || 10000;
 const HOST = '0.0.0.0';  // Wichtig für Render-Deployment
 
-app.listen(PORT, HOST, () => {
+// HTTP Server erstellen
+const server = app.listen(PORT, HOST, () => {
   console.log('═══════════════════════════════════════════════');
   console.log('🤖 Krypto-Trading-Bot Backend');
   console.log('═══════════════════════════════════════════════');
   console.log(`🌐 Server läuft auf: http://${HOST}:${PORT}`);
+  console.log(`🔌 WebSocket URL: ws://${HOST}:${PORT}/ws`);
   console.log(`📊 Supabase-URL: ${supabaseUrl}`);
   console.log(`🔑 Supabase-Key: ${supabaseKey ? '✅ gesetzt' : '❌ FEHLT'}`);
   console.log(`📍 Bot-Status: ${botStatus}`);
   console.log('═══════════════════════════════════════════════');
   console.log('API-Endpunkte:');
-  console.log(`  GET  /api/status     - Bot-Status abfragen`);
-  console.log(`  POST /api/start-bot  - Bot starten`);
-  console.log(`  POST /api/stop-bot   - Bot stoppen`);
+  console.log(`  GET  /api/status              - Bot-Status abfragen`);
+  console.log(`  POST /api/start-bot           - Bot starten`);
+  console.log(`  POST /api/stop-bot            - Bot stoppen`);
+  console.log(`  POST /api/backtest            - Backtesting durchführen`);
+  console.log(`  GET  /api/strategy-performance - Strategie-Performance abfragen`);
+  console.log(`  GET  /api/strategies          - Alle Strategien abrufen`);
+  console.log(`  PUT  /api/strategies/:id      - Strategie aktualisieren`);
+  console.log(`  GET  /api/trades              - Trades abrufen`);
+  console.log(`  GET  /api/positions           - Offene Positionen`);
+  console.log(`  GET  /api/performance         - Performance-Metriken`);
+  console.log(`  GET  /api/market/prices       - Marktpreise abrufen`);
   console.log('═══════════════════════════════════════════════');
   
   // AUTOMATISCHER BOT-START BEIM SERVER-START
@@ -1571,5 +2708,16 @@ app.listen(PORT, HOST, () => {
       await loadBotSettings(true);
     }, 5 * 60 * 1000);
   }, 60000); // Starte nach 1 Minute
+});
+
+// WebSocket upgrade handling
+server.on('upgrade', (request, socket, head) => {
+  if (request.url === '/ws') {
+    wss.handleUpgrade(request, socket, head, (ws) => {
+      wss.emit('connection', ws, request);
+    });
+  } else {
+    socket.destroy();
+  }
 });
 

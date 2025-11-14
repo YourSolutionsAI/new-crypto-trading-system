@@ -1,84 +1,128 @@
-// Bot Status Card Component
-
 'use client';
 
-import { Card } from '@/components/ui/Card';
-import { Badge } from '@/components/ui/Badge';
-import { useBotStore } from '@/store/botStore';
-import { useEffect } from 'react';
-import { apiClient } from '@/lib/api';
+import { useEffect, useState } from 'react';
+import { useTradingStore } from '@/lib/store';
+import { api } from '@/lib/api';
+import { cn } from '@/lib/utils';
+import { formatDate } from '@/lib/utils';
+import { Power, Activity, Wifi, Clock } from 'lucide-react';
+import toast from 'react-hot-toast';
 
 export function BotStatusCard() {
-  const { botStatus, setBotStatus, isLoading, setLoading } = useBotStore();
+  const { botStatus, setBotStatus } = useTradingStore();
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    // Lade initialen Status
-    loadStatus();
-
-    // Polling alle 5 Sekunden
-    const interval = setInterval(loadStatus, 5000);
-    return () => clearInterval(interval);
+    loadBotStatus();
   }, []);
 
-  const loadStatus = async () => {
+  const loadBotStatus = async () => {
     try {
-      const status = await apiClient.getStatus();
+      const status = await api.getStatus();
       setBotStatus(status);
     } catch (error) {
-      console.error('Fehler beim Laden des Bot-Status:', error);
+      console.error('Error loading bot status:', error);
+      toast.error('Fehler beim Laden des Bot-Status');
     }
   };
 
-  const getStatusVariant = (status: string | null) => {
-    switch (status) {
-      case 'läuft':
-        return 'success';
-      case 'gestoppt':
-        return 'neutral';
-      case 'startet':
-      case 'stoppt':
-        return 'warning';
-      default:
-        return 'neutral';
+  const handleToggleBot = async () => {
+    setLoading(true);
+    try {
+      if (botStatus?.status === 'running') {
+        const result = await api.stopBot();
+        if (result.success) {
+          toast.success('Bot wurde gestoppt');
+          setBotStatus({ ...botStatus, status: 'stopped', timestamp: new Date().toISOString() });
+        }
+      } else {
+        const result = await api.startBot();
+        if (result.success) {
+          toast.success('Bot wurde gestartet');
+          setBotStatus({ ...result.data, status: 'running', timestamp: new Date().toISOString() });
+        }
+      }
+    } catch (error) {
+      console.error('Error toggling bot:', error);
+      toast.error('Fehler beim Ändern des Bot-Status');
+    } finally {
+      setLoading(false);
+      // Reload status after action
+      setTimeout(loadBotStatus, 1000);
     }
   };
 
-  const getStatusText = (status: string | null) => {
-    switch (status) {
-      case 'läuft':
-        return 'Aktiv';
-      case 'gestoppt':
-        return 'Gestoppt';
-      case 'startet':
-        return 'Startet...';
-      case 'stoppt':
-        return 'Stoppt...';
-      default:
-        return 'Unbekannt';
-    }
-  };
+  const isRunning = botStatus?.status === 'running';
 
   return (
-    <Card title="Bot-Status">
-      <div className="flex items-center justify-between">
-        <div>
-          <p className="text-sm text-gray-600 dark:text-gray-400">Aktueller Status</p>
-          <div className="mt-2 flex items-center gap-3">
-            <Badge variant={getStatusVariant(botStatus?.status || null)}>
-              {getStatusText(botStatus?.status || null)}
-            </Badge>
-            {botStatus?.timestamp && (
-              <span className="text-xs text-gray-500 dark:text-gray-400">
-                {new Date(botStatus.timestamp).toLocaleTimeString('de-DE')}
-              </span>
-            )}
+    <div className="bg-card p-6 rounded-xl border border-border shadow-sm">
+      <div className="flex items-center justify-between mb-4">
+        <h2 className="text-lg font-semibold flex items-center gap-2">
+          <Activity className="h-5 w-5" />
+          Bot Status
+        </h2>
+        <button
+          onClick={handleToggleBot}
+          disabled={loading}
+          className={cn(
+            "flex items-center gap-2 px-4 py-2 rounded-lg font-medium transition-all",
+            "disabled:opacity-50 disabled:cursor-not-allowed",
+            isRunning
+              ? "bg-red-500 hover:bg-red-600 text-white"
+              : "bg-green-500 hover:bg-green-600 text-white"
+          )}
+        >
+          <Power className="h-4 w-4" />
+          {loading ? 'Lädt...' : isRunning ? 'Stoppen' : 'Starten'}
+        </button>
+      </div>
+
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-muted-foreground">Status</span>
+          <div className="flex items-center gap-2">
+            <div className={cn(
+              "h-2 w-2 rounded-full",
+              isRunning ? "bg-green-500 animate-pulse" : "bg-red-500"
+            )} />
+            <span className={cn(
+              "font-medium",
+              isRunning ? "text-green-500" : "text-red-500"
+            )}>
+              {isRunning ? 'Aktiv' : 'Inaktiv'}
+            </span>
           </div>
         </div>
-        {isLoading && (
-          <div className="h-5 w-5 animate-spin rounded-full border-2 border-gray-300 border-t-blue-600"></div>
+
+        {botStatus?.tradingBotProcessCount !== undefined && (
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Aktive Prozesse</span>
+            <span className="font-medium">{botStatus.tradingBotProcessCount}</span>
+          </div>
         )}
+
+        {botStatus?.version && (
+          <div className="flex items-center justify-between">
+            <span className="text-muted-foreground">Version</span>
+            <span className="font-medium">{botStatus.version}</span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-between">
+          <span className="text-muted-foreground">Letztes Update</span>
+          <span className="text-sm">
+            {botStatus ? formatDate(botStatus.timestamp) : '-'}
+          </span>
+        </div>
       </div>
-    </Card>
+
+      {isRunning && (
+        <div className="mt-4 p-3 bg-green-500/10 rounded-lg">
+          <p className="text-sm text-green-600 dark:text-green-400">
+            Der Bot handelt aktiv. Alle Strategien werden überwacht.
+          </p>
+        </div>
+      )}
+    </div>
   );
 }
-
