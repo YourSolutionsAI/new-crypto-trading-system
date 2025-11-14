@@ -27,6 +27,11 @@ export function useWebSocket() {
   } = useTradingStore();
 
   const connect = useCallback(() => {
+    // Nur client-side ausführen
+    if (typeof window === 'undefined') {
+      return;
+    }
+
     if (ws.current?.readyState === WebSocket.OPEN) {
       return;
     }
@@ -66,7 +71,9 @@ export function useWebSocket() {
         // Auto-reconnect logic
         if (reconnectAttempts.current < maxReconnectAttempts) {
           reconnectAttempts.current++;
-          toast.warning(`Verbindung verloren. Versuche erneut... (${reconnectAttempts.current}/${maxReconnectAttempts})`);
+          toast(`Verbindung verloren. Versuche erneut... (${reconnectAttempts.current}/${maxReconnectAttempts})`, {
+            icon: '⚠️',
+          });
           
           reconnectTimer.current = setTimeout(() => {
             connect();
@@ -164,6 +171,11 @@ export function useWebSocket() {
   }, []);
 
   useEffect(() => {
+    // Nur client-side ausführen (wichtig für SSR/Serverless Functions)
+    if (typeof window === 'undefined') {
+      return;
+    }
+
     connect();
 
     return () => {
