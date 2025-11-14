@@ -1167,23 +1167,34 @@ async function startTradingBot() {
     console.log(`   Grund: ${reason || 'Unbekannt'}`);
     console.log(`   Preis-Historie: ${priceHistory.length} Einträge`);
     console.log('═══════════════════════════════════════════════');
-    botStatus = 'gestoppt (Verbindung verloren)';
+    
+    // WICHTIG: Prüfe ob Bot manuell gestoppt wurde
+    const wasManuallyStopped = botStatus === 'gestoppt';
+    
+    if (!wasManuallyStopped) {
+      // Nur wenn NICHT manuell gestoppt, als Verbindungsverlust behandeln
+      botStatus = 'gestoppt (Verbindung verloren)';
+      
+      // Reset
+      activeStrategies = [];
+      priceHistory = [];
+      
+      // Versuche automatisch neu zu verbinden nach 30 Sekunden
+      console.log('🔄 Versuche automatische Wiederverbindung in 30 Sekunden...');
+      setTimeout(() => {
+        if (botStatus === 'gestoppt (Verbindung verloren)') {
+          console.log('🔄 Starte automatische Wiederverbindung...');
+          startTradingBot().catch(err => {
+            console.error('❌ Fehler bei automatischer Wiederverbindung:', err);
+          });
+        }
+      }, 30000);
+    } else {
+      // Bot wurde manuell gestoppt - keine automatische Wiederverbindung
+      console.log('ℹ️  Bot wurde manuell gestoppt - Keine automatische Wiederverbindung');
+    }
+    
     tradingBotProcess = null;
-    
-    // Reset
-    activeStrategies = [];
-    priceHistory = [];
-    
-    // Versuche automatisch neu zu verbinden nach 30 Sekunden
-    console.log('🔄 Versuche automatische Wiederverbindung in 30 Sekunden...');
-    setTimeout(() => {
-      if (botStatus === 'gestoppt (Verbindung verloren)') {
-        console.log('🔄 Starte automatische Wiederverbindung...');
-        startTradingBot().catch(err => {
-          console.error('❌ Fehler bei automatischer Wiederverbindung:', err);
-        });
-      }
-    }, 30000);
   });
 
   ws.on('error', (error) => {
