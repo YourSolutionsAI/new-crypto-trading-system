@@ -72,7 +72,7 @@ export default function Dashboard() {
                     Bot Status
                   </dt>
                   <dd className="text-lg font-medium text-gray-900">
-                    {botStatus?.status === 'running' ? '🟢 Läuft' : '🔴 Gestoppt'}
+                    {botStatus?.status === 'running' || botStatus?.status === 'läuft' ? '🟢 Läuft' : '🔴 Gestoppt'}
                   </dd>
                 </dl>
               </div>

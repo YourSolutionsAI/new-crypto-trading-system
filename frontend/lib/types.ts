@@ -1,7 +1,7 @@
 // TypeScript Types für das Frontend
 
 export interface BotStatus {
-  status: 'running' | 'stopped';
+  status: 'running' | 'stopped' | 'läuft' | 'gestoppt' | 'startet...' | string;
   timestamp: string;
 }
 

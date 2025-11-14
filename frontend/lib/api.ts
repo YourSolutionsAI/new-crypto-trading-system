@@ -36,8 +36,32 @@ api.interceptors.response.use(
 
 // Bot Control
 export const getBotStatus = async (): Promise<BotStatus> => {
-  const response = await api.get('/api/status');
-  return response.data;
+  try {
+    const response = await api.get('/api/status');
+    console.log('🤖 Bot Status API Response:', response.data);
+    const status = response.data.status || 'stopped';
+    console.log('🤖 Raw Status:', status);
+    
+    // Normalisiere Status: 'läuft' -> 'running', 'gestoppt' -> 'stopped'
+    const normalizedStatus = 
+      status === 'läuft' || status === 'running' ? 'running' :
+      status === 'gestoppt' || status === 'stopped' ? 'stopped' :
+      status;
+    
+    console.log('🤖 Normalized Status:', normalizedStatus);
+    
+    return {
+      status: normalizedStatus,
+      timestamp: response.data.timestamp || new Date().toISOString()
+    };
+  } catch (error) {
+    console.error('❌ Fehler beim Laden des Bot-Status:', error);
+    console.error('❌ Error Details:', error);
+    return {
+      status: 'stopped',
+      timestamp: new Date().toISOString()
+    };
+  }
 };
 
 export const startBot = async () => {
@@ -102,30 +126,46 @@ export const getPositions = async (): Promise<Position[]> => {
 export const getStrategies = async (): Promise<Strategy[]> => {
   try {
     const response = await api.get('/api/strategies');
+    console.log('📊 API Response:', response.data);
     const strategies = response.data.strategies || [];
+    console.log('📊 Strategien geladen:', strategies.length);
+    
     // Sicherstellen, dass alle Werte definiert sind
-    return strategies.map((strategy: any) => ({
-      ...strategy,
-      win_rate: strategy.win_rate ?? 0,
-      total_pnl: strategy.total_pnl ?? 0,
-      total_trades: strategy.total_trades ?? 0,
-      profitable_trades: strategy.profitable_trades ?? 0,
-      config: {
-        ...strategy.config,
-        ma_short: strategy.config?.ma_short ?? undefined,
-        ma_long: strategy.config?.ma_long ?? undefined,
-        trade_size_usdt: strategy.config?.trade_size_usdt ?? undefined,
-        settings: strategy.config?.settings ? {
-          signal_threshold_percent: strategy.config.settings.signal_threshold_percent ?? undefined,
-          signal_cooldown_ms: strategy.config.settings.signal_cooldown_ms ?? undefined,
-          trade_cooldown_ms: strategy.config.settings.trade_cooldown_ms ?? undefined,
-        } : undefined,
-        risk: strategy.config?.risk ? {
-          stop_loss_percent: strategy.config.risk.stop_loss_percent ?? undefined,
-          take_profit_percent: strategy.config.risk.take_profit_percent ?? undefined,
-        } : undefined,
-      },
-    }));
+    const normalizedStrategies = strategies.map((strategy: any) => {
+      // Normalisiere is_active: PostgreSQL gibt 'active' zurück, aber wir brauchen 'is_active'
+      const isActive = strategy.is_active !== undefined 
+        ? strategy.is_active 
+        : (strategy.active !== undefined ? strategy.active : false);
+      
+      console.log(`📊 Strategie ${strategy.name}: active=${strategy.active}, is_active=${strategy.is_active}, normalized=${isActive}`);
+      
+      return {
+        ...strategy,
+        is_active: isActive, // Sicherstellen, dass is_active gesetzt ist
+        win_rate: strategy.win_rate ?? 0,
+        total_pnl: strategy.total_pnl ?? 0,
+        total_trades: strategy.total_trades ?? 0,
+        profitable_trades: strategy.profitable_trades ?? 0,
+        config: {
+          ...strategy.config,
+          ma_short: strategy.config?.ma_short ?? undefined,
+          ma_long: strategy.config?.ma_long ?? undefined,
+          trade_size_usdt: strategy.config?.trade_size_usdt ?? undefined,
+          settings: strategy.config?.settings ? {
+            signal_threshold_percent: strategy.config.settings.signal_threshold_percent ?? undefined,
+            signal_cooldown_ms: strategy.config.settings.signal_cooldown_ms ?? undefined,
+            trade_cooldown_ms: strategy.config.settings.trade_cooldown_ms ?? undefined,
+          } : undefined,
+          risk: strategy.config?.risk ? {
+            stop_loss_percent: strategy.config.risk.stop_loss_percent ?? undefined,
+            take_profit_percent: strategy.config.risk.take_profit_percent ?? undefined,
+          } : undefined,
+        },
+      };
+    });
+    
+    console.log('📊 Normalisierte Strategien:', normalizedStrategies);
+    return normalizedStrategies;
   } catch (error) {
     console.error('Fehler beim Laden der Strategien:', error);
     return [];
