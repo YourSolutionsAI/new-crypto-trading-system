@@ -383,9 +383,8 @@ app.get('/api/positions', async (req, res) => {
         continue;
       }
       
-      // KRITISCH: Korrigierte FIFO-Logik (First In First Out)
-      // Jeder SELL schließt den ältesten noch offenen BUY
-      // Wir müssen alle Trades chronologisch sortieren und dann paaren
+      // KRITISCH: FIFO-Logik - Alle Trades chronologisch sortieren
+      // Jeder SELL schließt den ältesten noch offenen BUY (First In First Out)
       
       // Kombiniere alle Trades und sortiere chronologisch
       const allTrades = [];
@@ -409,71 +408,56 @@ app.get('/api/positions', async (req, res) => {
       
       // FIFO-Logik: Jeder SELL schließt den ältesten noch offenen BUY
       const openBuyTrades = [];
-      let totalOpenQuantity = 0;
-      let totalValue = 0;
       
       for (const trade of allTrades) {
         if (trade.type === 'buy') {
           // BUY-Trade hinzufügen
-          openBuyTrades.push(trade);
-          totalOpenQuantity += parseFloat(trade.quantity);
-          totalValue += parseFloat(trade.price) * parseFloat(trade.quantity);
+          openBuyTrades.push({
+            ...trade,
+            remainingQuantity: parseFloat(trade.quantity)
+          });
         } else if (trade.type === 'sell') {
           // SELL-Trade: Schließt den ältesten noch offenen BUY (FIFO)
-          if (openBuyTrades.length === 0) {
-            // KEIN BUY vorhanden - das sollte nicht passieren, aber wir loggen es
-            console.warn(`⚠️  [${symbol}] SELL-Trade ohne offene BUY-Position gefunden: ${trade.order_id} @ ${trade.executed_at}`);
-            continue; // Überspringe diesen SELL
-          }
-          
           const sellQuantity = parseFloat(trade.quantity);
           let remainingSellQuantity = sellQuantity;
           
           // Schließe BUY-Trades mit FIFO-Logik
           while (remainingSellQuantity > 0 && openBuyTrades.length > 0) {
             const oldestBuyTrade = openBuyTrades[0];
-            const buyQuantity = parseFloat(oldestBuyTrade.quantity);
-            const buyValue = parseFloat(oldestBuyTrade.price) * buyQuantity;
+            const buyRemainingQuantity = oldestBuyTrade.remainingQuantity;
             
-            if (remainingSellQuantity >= buyQuantity) {
+            if (remainingSellQuantity >= buyRemainingQuantity) {
               // Dieser BUY wird komplett geschlossen
               openBuyTrades.shift(); // Entferne den ältesten BUY
-              totalOpenQuantity -= buyQuantity;
-              totalValue -= buyValue;
-              remainingSellQuantity -= buyQuantity;
+              remainingSellQuantity -= buyRemainingQuantity;
             } else {
               // Nur teilweise geschlossen - reduziere die Menge
-              totalOpenQuantity -= remainingSellQuantity;
-              totalValue -= (parseFloat(oldestBuyTrade.price) * remainingSellQuantity);
-              
-              // Aktualisiere die verbleibende Menge im BUY-Trade
-              oldestBuyTrade.quantity = (buyQuantity - remainingSellQuantity).toString();
+              oldestBuyTrade.remainingQuantity -= remainingSellQuantity;
               remainingSellQuantity = 0;
             }
           }
           
           if (remainingSellQuantity > 0) {
             // Mehr verkauft als gekauft - das sollte nicht passieren
-            console.warn(`⚠️  [${symbol}] SELL-Trade verkauft mehr als gekauft: ${trade.order_id} (Verkauft: ${sellQuantity}, Offen: ${totalOpenQuantity})`);
+            console.warn(`⚠️  [${symbol}] SELL-Trade verkauft mehr als gekauft: ${trade.order_id} (Verkauft: ${sellQuantity}, Verbleibend: ${remainingSellQuantity})`);
           }
         }
       }
       
       // Wenn es offene Positionen gibt, berechne gewichteten Durchschnittspreis
-      if (openBuyTrades.length > 0 && totalOpenQuantity > 0) {
-        // Berechne totalValue und totalQuantity aus den verbleibenden offenen BUY-Trades
-        let recalculatedTotalValue = 0;
-        let recalculatedTotalQuantity = 0;
+      if (openBuyTrades.length > 0) {
+        let totalValue = 0;
+        let totalQuantity = 0;
         
         for (const trade of openBuyTrades) {
-          const qty = parseFloat(trade.quantity);
+          const qty = trade.remainingQuantity || parseFloat(trade.quantity);
           const price = parseFloat(trade.price);
-          recalculatedTotalValue += qty * price;
-          recalculatedTotalQuantity += qty;
+          totalValue += qty * price;
+          totalQuantity += qty;
         }
         
-        if (recalculatedTotalQuantity > 0) {
-          const weightedAveragePrice = recalculatedTotalValue / recalculatedTotalQuantity;
+        if (totalQuantity > 0) {
+          const weightedAveragePrice = totalValue / totalQuantity;
           
           // Hole aktuellen Preis von Binance (falls verfügbar)
           let currentPrice = weightedAveragePrice; // Fallback
@@ -486,7 +470,7 @@ app.get('/api/positions', async (req, res) => {
             console.warn(`⚠️  Konnte aktuellen Preis für ${symbol} nicht laden:`, error.message);
           }
           
-          const pnl = (currentPrice - weightedAveragePrice) * recalculatedTotalQuantity;
+          const pnl = (currentPrice - weightedAveragePrice) * totalQuantity;
           const pnlPercent = weightedAveragePrice > 0 
             ? ((currentPrice - weightedAveragePrice) / weightedAveragePrice) * 100 
             : 0;
@@ -494,7 +478,7 @@ app.get('/api/positions', async (req, res) => {
           allPositions.push({
             id: `${strategy.id}_${symbol}`,
             symbol: symbol,
-            quantity: recalculatedTotalQuantity,
+            quantity: totalQuantity,
             entryPrice: weightedAveragePrice,
             currentPrice: currentPrice,
             pnl: pnl,
@@ -506,7 +490,7 @@ app.get('/api/positions', async (req, res) => {
         }
       }
     }
-    
+
     res.json({ 
       success: true, 
       positions: allPositions 
