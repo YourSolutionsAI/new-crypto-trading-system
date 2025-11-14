@@ -383,63 +383,36 @@ app.get('/api/positions', async (req, res) => {
         continue;
       }
       
-      // KRITISCH: FIFO-Logik - Alle Trades chronologisch sortieren
-      // Jeder SELL schließt den ältesten noch offenen BUY (First In First Out)
-      
-      // Kombiniere alle Trades und sortiere chronologisch
-      const allTrades = [];
-      if (buyTrades) {
-        buyTrades.forEach(trade => {
-          allTrades.push({ ...trade, type: 'buy' });
-        });
-      }
-      if (sellTrades) {
-        sellTrades.forEach(trade => {
-          allTrades.push({ ...trade, type: 'sell' });
-        });
-      }
-      
-      // Sortiere alle Trades chronologisch nach executed_at
-      allTrades.sort((a, b) => {
-        const dateA = new Date(a.executed_at || a.created_at);
-        const dateB = new Date(b.executed_at || b.created_at);
-        return dateA - dateB;
-      });
-      
-      // FIFO-Logik: Jeder SELL schließt den ältesten noch offenen BUY
+      // FIFO-Logik: Paare BUY- und SELL-Trades
       const openBuyTrades = [];
+      let sellIndex = 0;
       
-      for (const trade of allTrades) {
-        if (trade.type === 'buy') {
-          // BUY-Trade hinzufügen
-          openBuyTrades.push({
-            ...trade,
-            remainingQuantity: parseFloat(trade.quantity)
-          });
-        } else if (trade.type === 'sell') {
-          // SELL-Trade: Schließt den ältesten noch offenen BUY (FIFO)
-          const sellQuantity = parseFloat(trade.quantity);
-          let remainingSellQuantity = sellQuantity;
+      if (buyTrades) {
+        for (const buyTrade of buyTrades) {
+          let remainingQuantity = parseFloat(buyTrade.quantity);
           
-          // Schließe BUY-Trades mit FIFO-Logik
-          while (remainingSellQuantity > 0 && openBuyTrades.length > 0) {
-            const oldestBuyTrade = openBuyTrades[0];
-            const buyRemainingQuantity = oldestBuyTrade.remainingQuantity;
+          // Versuche, diese BUY-Position mit SELL-Trades zu schließen
+          while (remainingQuantity > 0 && sellTrades && sellIndex < sellTrades.length) {
+            const sellTrade = sellTrades[sellIndex];
+            const sellQuantity = parseFloat(sellTrade.quantity);
             
-            if (remainingSellQuantity >= buyRemainingQuantity) {
-              // Dieser BUY wird komplett geschlossen
-              openBuyTrades.shift(); // Entferne den ältesten BUY
-              remainingSellQuantity -= buyRemainingQuantity;
+            if (sellQuantity >= remainingQuantity) {
+              // Dieser SELL schließt die gesamte BUY-Position
+              remainingQuantity = 0;
+              sellIndex++;
             } else {
-              // Nur teilweise geschlossen - reduziere die Menge
-              oldestBuyTrade.remainingQuantity -= remainingSellQuantity;
-              remainingSellQuantity = 0;
+              // Dieser SELL schließt nur einen Teil der BUY-Position
+              remainingQuantity -= sellQuantity;
+              sellIndex++;
             }
           }
           
-          if (remainingSellQuantity > 0) {
-            // Mehr verkauft als gekauft - das sollte nicht passieren
-            console.warn(`⚠️  [${symbol}] SELL-Trade verkauft mehr als gekauft: ${trade.order_id} (Verkauft: ${sellQuantity}, Verbleibend: ${remainingSellQuantity})`);
+          // Wenn noch etwas übrig ist, ist die Position offen
+          if (remainingQuantity > 0) {
+            openBuyTrades.push({
+              ...buyTrade,
+              remainingQuantity: remainingQuantity
+            });
           }
         }
       }

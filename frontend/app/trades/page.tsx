@@ -28,8 +28,16 @@ export default function TradesPage() {
         getTrades(limit).catch(() => []),
         getPositions().catch(() => []),
       ]);
+      console.log('📊 Trades Page - Geladene Daten:');
+      console.log('  Positionen:', positionsData);
+      console.log('  Trades:', tradesData);
+      
+      // Filtere Positionen mit quantity = 0 heraus
+      const validPositions = positionsData.filter(p => (p.quantity || 0) > 0);
+      console.log(`📊 Gefilterte Positionen: ${validPositions.length} von ${positionsData.length}`);
+      
       setTrades(tradesData);
-      setPositions(positionsData);
+      setPositions(validPositions);
     } catch (error) {
       console.error('Fehler beim Laden der Trades:', error);
     } finally {
