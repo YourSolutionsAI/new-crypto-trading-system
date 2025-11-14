@@ -5,6 +5,11 @@ import { getTrades, getPositions } from '@/lib/api';
 import type { Trade, Position } from '@/lib/types';
 import { format } from 'date-fns';
 
+// Helper function to check if trade is a buy
+const isBuy = (side: string): boolean => {
+  return side.toUpperCase() === 'BUY';
+};
+
 export default function TradesPage() {
   const [trades, setTrades] = useState<Trade[]>([]);
   const [positions, setPositions] = useState<Position[]>([]);
@@ -173,7 +178,7 @@ export default function TradesPage() {
                       <td className="px-6 py-4 whitespace-nowrap">
                         <span
                           className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                            trade.side === 'buy'
+                            isBuy(trade.side)
                               ? 'bg-green-100 text-green-800'
                               : 'bg-red-100 text-red-800'
                           }`}
@@ -188,7 +193,7 @@ export default function TradesPage() {
                         {trade.quantity.toFixed(8)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {trade.total.toFixed(2)} USDT
+                        {((trade as any).total ? (trade as any).total.toFixed(2) : (trade.price * trade.quantity).toFixed(2))} USDT
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm">
                         {trade.pnl !== undefined ? (

@@ -9,6 +9,13 @@ export default function StrategiesPage() {
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<Partial<Strategy['config']>>({});
+  
+  // Helper type für settings mit optionalen Feldern
+  type SettingsForm = {
+    signal_threshold_percent?: number;
+    signal_cooldown_ms?: number;
+    trade_cooldown_ms?: number;
+  };
 
   useEffect(() => {
     loadStrategies();
@@ -41,22 +48,22 @@ export default function StrategiesPage() {
       ma_short: strategy.config.ma_short,
       ma_long: strategy.config.ma_long,
       trade_size_usdt: strategy.config.trade_size_usdt,
-      settings: {
+      settings: strategy.config.settings ? {
         signal_threshold_percent:
-          strategy.config.settings?.signal_threshold_percent,
-        signal_cooldown_ms: strategy.config.settings?.signal_cooldown_ms,
-        trade_cooldown_ms: strategy.config.settings?.trade_cooldown_ms,
-      },
-      risk: {
-        stop_loss_percent: strategy.config.risk?.stop_loss_percent,
-        take_profit_percent: strategy.config.risk?.take_profit_percent,
-      },
+          strategy.config.settings.signal_threshold_percent,
+        signal_cooldown_ms: strategy.config.settings.signal_cooldown_ms,
+        trade_cooldown_ms: strategy.config.settings.trade_cooldown_ms,
+      } : undefined,
+      risk: strategy.config.risk ? {
+        stop_loss_percent: strategy.config.risk.stop_loss_percent,
+        take_profit_percent: strategy.config.risk.take_profit_percent,
+      } : undefined,
     });
   };
 
   const handleSaveEdit = async (id: string) => {
     try {
-      await updateStrategy(id, { config: editForm });
+      await updateStrategy(id, { config: editForm } as any);
       setEditingId(null);
       await loadStrategies();
     } catch (error) {
@@ -118,9 +125,9 @@ export default function StrategiesPage() {
                       {strategy.is_active ? 'Aktiv' : 'Inaktiv'}
                     </span>
                   </div>
-                  {strategy.description && (
+                  {(strategy as any).description && (
                     <p className="mt-1 text-sm text-gray-500">
-                      {strategy.description}
+                      {(strategy as any).description}
                     </p>
                   )}
 
@@ -186,17 +193,17 @@ export default function StrategiesPage() {
                             value={
                               editForm.settings?.signal_threshold_percent || ''
                             }
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const value = parseFloat(e.target.value);
+                              const newSettings: SettingsForm = {
+                                ...editForm.settings,
+                                signal_threshold_percent: isNaN(value) ? undefined : value,
+                              };
                               setEditForm({
                                 ...editForm,
-                                settings: {
-                                  ...editForm.settings,
-                                  signal_threshold_percent: parseFloat(
-                                    e.target.value
-                                  ),
-                                },
-                              })
-                            }
+                                settings: newSettings as Strategy['config']['settings'],
+                              });
+                            }}
                             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                           />
                         </div>
@@ -207,15 +214,17 @@ export default function StrategiesPage() {
                           <input
                             type="number"
                             value={editForm.settings?.signal_cooldown_ms || ''}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const value = parseInt(e.target.value);
+                              const newSettings: SettingsForm = {
+                                ...editForm.settings,
+                                signal_cooldown_ms: isNaN(value) ? undefined : value,
+                              };
                               setEditForm({
                                 ...editForm,
-                                settings: {
-                                  ...editForm.settings,
-                                  signal_cooldown_ms: parseInt(e.target.value),
-                                },
-                              })
-                            }
+                                settings: newSettings as Strategy['config']['settings'],
+                              });
+                            }}
                             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                           />
                         </div>
@@ -226,15 +235,17 @@ export default function StrategiesPage() {
                           <input
                             type="number"
                             value={editForm.settings?.trade_cooldown_ms || ''}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const value = parseInt(e.target.value);
+                              const newSettings: SettingsForm = {
+                                ...editForm.settings,
+                                trade_cooldown_ms: isNaN(value) ? undefined : value,
+                              };
                               setEditForm({
                                 ...editForm,
-                                settings: {
-                                  ...editForm.settings,
-                                  trade_cooldown_ms: parseInt(e.target.value),
-                                },
-                              })
-                            }
+                                settings: newSettings as Strategy['config']['settings'],
+                              });
+                            }}
                             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
                           />
                         </div>

@@ -62,7 +62,7 @@ export const getStrategies = async (): Promise<Strategy[]> => {
 
 export const updateStrategy = async (
   id: string,
-  updates: Partial<Strategy>
+  updates: Partial<Strategy> | { config: Partial<Strategy['config']> }
 ): Promise<Strategy> => {
   const response = await api.put(`/api/strategies/${id}`, updates);
   return response.data.strategy;
