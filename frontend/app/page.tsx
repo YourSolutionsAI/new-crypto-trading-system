@@ -109,8 +109,8 @@ export default function Dashboard() {
                         {position.symbol}
                       </p>
                       <p className="text-sm text-gray-500">
-                        {position.quantity?.toFixed(8) || '0'} @{' '}
-                        {position.entryPrice?.toFixed(8) || '0'}
+                        {(position.quantity ?? 0).toFixed(8)} @{' '}
+                        {(position.entryPrice ?? 0).toFixed(8)}
                       </p>
                     </div>
                     <div className="text-right">
@@ -190,14 +190,14 @@ export default function Dashboard() {
                       <p className="text-sm font-medium text-gray-900">
                         {(trade.quantity || 0).toFixed(8)} @ {(trade.price || 0).toFixed(8)}
                       </p>
-                      {trade.pnl !== undefined && (
+                      {trade.pnl !== undefined && trade.pnl !== null && (
                         <p
                           className={`text-sm font-medium ${
                             trade.pnl >= 0 ? 'text-green-600' : 'text-red-600'
                           }`}
                         >
                           {trade.pnl >= 0 ? '+' : ''}
-                          {trade.pnl.toFixed(2)} USDT
+                          {(trade.pnl ?? 0).toFixed(2)} USDT
                         </p>
                       )}
                     </div>

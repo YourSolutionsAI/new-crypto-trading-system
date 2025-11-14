@@ -45,18 +45,18 @@ export default function StrategiesPage() {
   const handleStartEdit = (strategy: Strategy) => {
     setEditingId(strategy.id);
     setEditForm({
-      ma_short: strategy.config.ma_short,
-      ma_long: strategy.config.ma_long,
-      trade_size_usdt: strategy.config.trade_size_usdt,
-      settings: strategy.config.settings ? {
+      ma_short: strategy.config?.ma_short,
+      ma_long: strategy.config?.ma_long,
+      trade_size_usdt: strategy.config?.trade_size_usdt,
+      settings: strategy.config?.settings ? {
         signal_threshold_percent:
-          strategy.config.settings.signal_threshold_percent,
-        signal_cooldown_ms: strategy.config.settings.signal_cooldown_ms,
-        trade_cooldown_ms: strategy.config.settings.trade_cooldown_ms,
+          strategy.config.settings.signal_threshold_percent ?? undefined,
+        signal_cooldown_ms: strategy.config.settings.signal_cooldown_ms ?? undefined,
+        trade_cooldown_ms: strategy.config.settings.trade_cooldown_ms ?? undefined,
       } : undefined,
-      risk: strategy.config.risk ? {
-        stop_loss_percent: strategy.config.risk.stop_loss_percent,
-        take_profit_percent: strategy.config.risk.take_profit_percent,
+      risk: strategy.config?.risk ? {
+        stop_loss_percent: strategy.config.risk.stop_loss_percent ?? undefined,
+        take_profit_percent: strategy.config.risk.take_profit_percent ?? undefined,
       } : undefined,
     });
   };
@@ -348,7 +348,7 @@ export default function StrategiesPage() {
                           <div>
                             <span className="text-gray-500">Win Rate:</span>
                             <span className="ml-2 font-medium text-gray-900">
-                              {strategy.win_rate?.toFixed(1) || '0'}%
+                              {(strategy.win_rate ?? 0).toFixed(1)}%
                             </span>
                           </div>
                           <div>
@@ -360,7 +360,7 @@ export default function StrategiesPage() {
                                   : 'text-red-600'
                               }`}
                             >
-                              {strategy.total_pnl?.toFixed(2) || '0.00'} USDT
+                              {(strategy.total_pnl ?? 0).toFixed(2)} USDT
                             </span>
                           </div>
                         </div>

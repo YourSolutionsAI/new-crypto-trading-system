@@ -193,17 +193,19 @@ export default function TradesPage() {
                         {(trade.quantity || 0).toFixed(8)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {((trade as any).total ? (trade as any).total.toFixed(2) : ((trade.price || 0) * (trade.quantity || 0)).toFixed(2))} USDT
+                        {((trade as any).total && (trade as any).total !== null) 
+                          ? ((trade as any).total ?? 0).toFixed(2) 
+                          : ((trade.price || 0) * (trade.quantity || 0)).toFixed(2)} USDT
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm">
-                        {trade.pnl !== undefined ? (
+                        {trade.pnl !== undefined && trade.pnl !== null ? (
                           <span
                             className={`font-medium ${
                               trade.pnl >= 0 ? 'text-green-600' : 'text-red-600'
                             }`}
                           >
                             {trade.pnl >= 0 ? '+' : ''}
-                            {trade.pnl.toFixed(2)} USDT
+                            {(trade.pnl ?? 0).toFixed(2)} USDT
                           </span>
                         ) : (
                           <span className="text-gray-400">-</span>

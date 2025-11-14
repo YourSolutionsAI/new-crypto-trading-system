@@ -100,8 +100,36 @@ export const getPositions = async (): Promise<Position[]> => {
 
 // Strategies
 export const getStrategies = async (): Promise<Strategy[]> => {
-  const response = await api.get('/api/strategies');
-  return response.data.strategies || [];
+  try {
+    const response = await api.get('/api/strategies');
+    const strategies = response.data.strategies || [];
+    // Sicherstellen, dass alle Werte definiert sind
+    return strategies.map((strategy: any) => ({
+      ...strategy,
+      win_rate: strategy.win_rate ?? 0,
+      total_pnl: strategy.total_pnl ?? 0,
+      total_trades: strategy.total_trades ?? 0,
+      profitable_trades: strategy.profitable_trades ?? 0,
+      config: {
+        ...strategy.config,
+        ma_short: strategy.config?.ma_short ?? undefined,
+        ma_long: strategy.config?.ma_long ?? undefined,
+        trade_size_usdt: strategy.config?.trade_size_usdt ?? undefined,
+        settings: strategy.config?.settings ? {
+          signal_threshold_percent: strategy.config.settings.signal_threshold_percent ?? undefined,
+          signal_cooldown_ms: strategy.config.settings.signal_cooldown_ms ?? undefined,
+          trade_cooldown_ms: strategy.config.settings.trade_cooldown_ms ?? undefined,
+        } : undefined,
+        risk: strategy.config?.risk ? {
+          stop_loss_percent: strategy.config.risk.stop_loss_percent ?? undefined,
+          take_profit_percent: strategy.config.risk.take_profit_percent ?? undefined,
+        } : undefined,
+      },
+    }));
+  } catch (error) {
+    console.error('Fehler beim Laden der Strategien:', error);
+    return [];
+  }
 };
 
 export const updateStrategy = async (
