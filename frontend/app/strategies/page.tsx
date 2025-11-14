@@ -16,7 +16,7 @@ export default function StrategiesPage() {
 
   const loadStrategies = async () => {
     try {
-      const data = await getStrategies();
+      const data = await getStrategies().catch(() => []);
       setStrategies(data);
     } catch (error) {
       console.error('Fehler beim Laden der Strategien:', error);

@@ -4,7 +4,6 @@ import { useEffect, useState } from 'react';
 import { getTrades, getPositions } from '@/lib/api';
 import type { Trade, Position } from '@/lib/types';
 import { format } from 'date-fns';
-import { de } from 'date-fns/locale';
 
 export default function TradesPage() {
   const [trades, setTrades] = useState<Trade[]>([]);
@@ -21,8 +20,8 @@ export default function TradesPage() {
   const loadData = async () => {
     try {
       const [tradesData, positionsData] = await Promise.all([
-        getTrades(limit),
-        getPositions(),
+        getTrades(limit).catch(() => []),
+        getPositions().catch(() => []),
       ]);
       setTrades(tradesData);
       setPositions(positionsData);
@@ -165,8 +164,7 @@ export default function TradesPage() {
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
                         {format(
                           new Date(trade.created_at),
-                          "dd.MM.yyyy HH:mm:ss",
-                          { locale: de }
+                          "dd.MM.yyyy HH:mm:ss"
                         )}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">

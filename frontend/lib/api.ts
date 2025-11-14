@@ -10,7 +10,20 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
+  timeout: 10000, // 10 Sekunden Timeout
 });
+
+// Error Handler
+api.interceptors.response.use(
+  (response) => response,
+  (error) => {
+    console.error('API Error:', error.message);
+    if (error.code === 'ECONNREFUSED' || error.code === 'ENOTFOUND') {
+      console.error('Backend nicht erreichbar. Prüfe NEXT_PUBLIC_API_URL:', API_URL);
+    }
+    return Promise.reject(error);
+  }
+);
 
 // Bot Control
 export const getBotStatus = async (): Promise<BotStatus> => {

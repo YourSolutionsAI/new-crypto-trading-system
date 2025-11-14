@@ -5,7 +5,6 @@ import { getBotStatus, getPositions, getTrades } from '@/lib/api';
 import type { BotStatus, Position, Trade } from '@/lib/types';
 import Link from 'next/link';
 import { format } from 'date-fns';
-import { de } from 'date-fns/locale';
 
 export default function Dashboard() {
   const [botStatus, setBotStatus] = useState<BotStatus | null>(null);
@@ -22,9 +21,9 @@ export default function Dashboard() {
   const loadData = async () => {
     try {
       const [status, pos, trades] = await Promise.all([
-        getBotStatus(),
-        getPositions(),
-        getTrades(10),
+        getBotStatus().catch(() => ({ status: 'stopped' as const, timestamp: new Date().toISOString() })),
+        getPositions().catch(() => []),
+        getTrades(10).catch(() => []),
       ]);
       setBotStatus(status);
       setPositions(pos);
@@ -183,8 +182,7 @@ export default function Dashboard() {
                       <p className="mt-1 text-sm text-gray-500">
                         {format(
                           new Date(trade.created_at),
-                          "dd.MM.yyyy HH:mm:ss",
-                          { locale: de }
+                          "dd.MM.yyyy HH:mm:ss"
                         )}
                       </p>
                     </div>
