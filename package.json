@@ -1,0 +1,25 @@
+{
+  "name": "crypto-trading-bot",
+  "version": "1.0.0",
+  "description": "Node.js Backend für einen Krypto-Trading-Bot mit Supabase-Integration",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "keywords": [
+    "crypto",
+    "trading",
+    "bot",
+    "binance",
+    "supabase"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "ws": "^8.14.2",
+    "@supabase/supabase-js": "^2.38.4"
+  }
+}
+
