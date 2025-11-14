@@ -4,7 +4,6 @@ const cors = require('cors');
 const WebSocket = require('ws');
 const { createClient } = require('@supabase/supabase-js');
 const Binance = require('binance-api-node').default;
-const config = require('./config');
 
 // Express-Server initialisieren
 const app = express();
@@ -355,8 +354,14 @@ function calculateQuantity(price, symbol, strategy) {
   // Berechne Basis-Menge
   let quantity = maxTradeSize / price;
   
-  // Hole Lot Size Regeln aus Supabase oder Fallback aus config.js
-  const lotSize = lotSizes[symbol] || config.lotSizes[symbol] || config.lotSizes.DEFAULT;
+  // Hole Lot Size Regeln aus Supabase
+  const lotSize = lotSizes[symbol];
+  
+  if (!lotSize) {
+    console.error(`❌ Keine Lot Size Konfiguration für ${symbol} gefunden!`);
+    console.error(`💡 Bitte fügen Sie lot_size_${symbol} in bot_settings hinzu!`);
+    return null; // Trade abbrechen wenn keine Lot Size vorhanden
+  }
   
   // Runde auf Step Size
   quantity = Math.floor(quantity / lotSize.stepSize) * lotSize.stepSize;
