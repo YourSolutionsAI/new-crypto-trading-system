@@ -109,28 +109,28 @@ export default function Dashboard() {
                         {position.symbol}
                       </p>
                       <p className="text-sm text-gray-500">
-                        {position.quantity.toFixed(8)} @{' '}
-                        {position.entryPrice.toFixed(8)}
+                        {position.quantity?.toFixed(8) || '0'} @{' '}
+                        {position.entryPrice?.toFixed(8) || '0'}
                       </p>
                     </div>
                     <div className="text-right">
                       <p
                         className={`text-sm font-medium ${
-                          position.pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                          (position.pnl || 0) >= 0 ? 'text-green-600' : 'text-red-600'
                         }`}
                       >
-                        {position.pnl >= 0 ? '+' : ''}
-                        {position.pnl.toFixed(2)} USDT
+                        {(position.pnl || 0) >= 0 ? '+' : ''}
+                        {(position.pnl || 0).toFixed(2)} USDT
                       </p>
                       <p
                         className={`text-sm ${
-                          position.pnlPercent >= 0
+                          (position.pnlPercent || 0) >= 0
                             ? 'text-green-600'
                             : 'text-red-600'
                         }`}
                       >
-                        {position.pnlPercent >= 0 ? '+' : ''}
-                        {position.pnlPercent.toFixed(2)}%
+                        {(position.pnlPercent || 0) >= 0 ? '+' : ''}
+                        {(position.pnlPercent || 0).toFixed(2)}%
                       </p>
                     </div>
                   </div>
@@ -188,7 +188,7 @@ export default function Dashboard() {
                     </div>
                     <div className="text-right">
                       <p className="text-sm font-medium text-gray-900">
-                        {trade.quantity.toFixed(8)} @ {trade.price.toFixed(8)}
+                        {(trade.quantity || 0).toFixed(8)} @ {(trade.price || 0).toFixed(8)}
                       </p>
                       {trade.pnl !== undefined && (
                         <p

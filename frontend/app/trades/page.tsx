@@ -77,19 +77,19 @@ export default function TradesPage() {
                         <div>
                           <span className="text-gray-500">Menge:</span>
                           <span className="ml-2 font-medium text-gray-900">
-                            {position.quantity.toFixed(8)}
+                            {(position.quantity || 0).toFixed(8)}
                           </span>
                         </div>
                         <div>
                           <span className="text-gray-500">Einstiegspreis:</span>
                           <span className="ml-2 font-medium text-gray-900">
-                            {position.entryPrice.toFixed(8)} USDT
+                            {(position.entryPrice || 0).toFixed(8)} USDT
                           </span>
                         </div>
                         <div>
                           <span className="text-gray-500">Aktueller Preis:</span>
                           <span className="ml-2 font-medium text-gray-900">
-                            {position.currentPrice.toFixed(8)} USDT
+                            {(position.currentPrice || 0).toFixed(8)} USDT
                           </span>
                         </div>
                       </div>
@@ -97,21 +97,21 @@ export default function TradesPage() {
                     <div className="ml-6 text-right">
                       <p
                         className={`text-2xl font-bold ${
-                          position.pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                          (position.pnl || 0) >= 0 ? 'text-green-600' : 'text-red-600'
                         }`}
                       >
-                        {position.pnl >= 0 ? '+' : ''}
-                        {position.pnl.toFixed(2)} USDT
+                        {(position.pnl || 0) >= 0 ? '+' : ''}
+                        {(position.pnl || 0).toFixed(2)} USDT
                       </p>
                       <p
                         className={`text-lg font-medium mt-1 ${
-                          position.pnlPercent >= 0
+                          (position.pnlPercent || 0) >= 0
                             ? 'text-green-600'
                             : 'text-red-600'
                         }`}
                       >
-                        {position.pnlPercent >= 0 ? '+' : ''}
-                        {position.pnlPercent.toFixed(2)}%
+                        {(position.pnlPercent || 0) >= 0 ? '+' : ''}
+                        {(position.pnlPercent || 0).toFixed(2)}%
                       </p>
                     </div>
                   </div>
@@ -187,13 +187,13 @@ export default function TradesPage() {
                         </span>
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {trade.price.toFixed(8)}
+                        {(trade.price || 0).toFixed(8)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {trade.quantity.toFixed(8)}
+                        {(trade.quantity || 0).toFixed(8)}
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                        {((trade as any).total ? (trade as any).total.toFixed(2) : (trade.price * trade.quantity).toFixed(2))} USDT
+                        {((trade as any).total ? (trade as any).total.toFixed(2) : ((trade.price || 0) * (trade.quantity || 0)).toFixed(2))} USDT
                       </td>
                       <td className="px-6 py-4 whitespace-nowrap text-sm">
                         {trade.pnl !== undefined ? (
