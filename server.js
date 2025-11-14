@@ -64,6 +64,7 @@ let openPositions = new Map(); // Tracking offener Positionen
 let currentSymbol = null; // Wird aus Supabase geladen
 let botSettings = {}; // Bot-Einstellungen aus Supabase
 let lotSizes = {}; // Lot Size Regeln aus Supabase
+const MAX_PRICE_HISTORY = 100; // Maximale Preishistorie
 
 // API-Routen
 
