@@ -323,8 +323,63 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 
     
     if (updateError || !updatedPosition) {
       // Race Condition erkannt - Position wurde zwischenzeitlich geändert
-      console.warn(`⚠️  Race Condition erkannt: Position wurde zwischenzeitlich geändert - Retry`);
-      // Retry: Lade Position neu und versuche nochmal (max. 1 Retry)
+      console.warn(`⚠️  Race Condition erkannt beim Position-Update: ${symbol}`);
+      console.warn(`   Update-Fehler: ${updateError?.message || 'Kein updatedPosition zurückgegeben'}`);
+      
+      // WICHTIG: Wenn Position komplett geschlossen werden sollte, erzwinge Schließung
+      // Dies verhindert, dass Positionen "hängen bleiben" bei Race Conditions
+      if (remainingQuantity <= 0.00000001) {
+        console.log(`🔄 Erzwinge Position-Schließung für ${symbol} (Bypass Quantity-Check wegen Race Condition)`);
+        
+        const { data: forceCloseResult, error: forceCloseError } = await supabase
+          .from('positions')
+          .update({
+            quantity: 0,
+            status: 'closed',
+            closed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', position.id)
+          .eq('status', 'open') // Nur updaten wenn noch offen
+          .select()
+          .single();
+        
+        if (forceCloseError) {
+          console.error(`❌ Fehler beim erzwungenen Schließen von ${symbol}: ${forceCloseError.message}`);
+          // Letzter Versuch: Update ohne Status-Check
+          const { error: finalError } = await supabase
+            .from('positions')
+            .update({
+              quantity: 0,
+              status: 'closed',
+              closed_at: new Date().toISOString(),
+              updated_at: new Date().toISOString()
+            })
+            .eq('id', position.id);
+          
+          if (finalError) {
+            console.error(`❌ Finaler Versuch fehlgeschlagen: ${finalError.message}`);
+            throw finalError;
+          }
+        }
+        
+        console.log(`✅ Position ${symbol} erfolgreich geschlossen (erzwungen)`);
+        
+        // Entferne aus In-Memory Map
+        const positionKey = `${strategyId}_${symbol}`;
+        if (openPositions.has(positionKey)) {
+          openPositions.delete(positionKey);
+        }
+        
+        return {
+          action: 'closed',
+          entry_price: entryPrice,
+          remaining_quantity: 0
+        };
+      }
+      
+      // Bei teilweiser Reduktion: Versuche Retry
+      console.warn(`⚠️  Race Condition bei Teilverkauf - versuche Retry`);
       const retryPosition = await supabase
         .from('positions')
         .select('*')
