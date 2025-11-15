@@ -967,7 +967,8 @@ app.get('/api/positions', async (req, res) => {
         strategies:strategy_id (
           id,
           name,
-          symbol
+          symbol,
+          config
         )
       `)
       .eq('status', 'open')
@@ -1003,6 +1004,118 @@ app.get('/api/positions', async (req, res) => {
         : 0;
       
       const strategyName = position.strategies?.name || 'Unbekannt';
+      const baseStrategy = position.strategies;
+      
+      // Lade vollständige Strategie-Konfiguration (inkl. coin_strategies)
+      let fullStrategyConfig = null;
+      let maShort = null;
+      let maLong = null;
+      let maCrossSellPrice = null;
+      let stopLossPrice = null;
+      let trailingStopPrice = null;
+      let useTrailingStop = false;
+      
+      if (baseStrategy && position.symbol) {
+        try {
+          // Lade coin_strategies für dieses Symbol
+          const { data: coinStrategy, error: coinError } = await supabase
+            .from('coin_strategies')
+            .select('config')
+            .eq('strategy_id', position.strategy_id)
+            .eq('symbol', position.symbol)
+            .single();
+          
+          if (!coinError && coinStrategy) {
+            // Merge Configs: Basis (strategies) + Coin-spezifisch (coin_strategies)
+            const baseConfig = baseStrategy.config || {};
+            const coinConfig = coinStrategy.config || {};
+            fullStrategyConfig = {
+              ...baseConfig,
+              settings: coinConfig.settings || {},
+              risk: coinConfig.risk || {}
+            };
+          } else {
+            // Fallback: Nur Basis-Strategie Config
+            fullStrategyConfig = baseStrategy.config || {};
+          }
+          
+          // Hole Preis-Historie für MA-Berechnung
+          let priceHistory = priceHistories.get(position.symbol) || [];
+          
+          // Wenn keine Historie vorhanden, versuche von Binance zu laden
+          if (priceHistory.length === 0 && binanceClient) {
+            try {
+              // Verwende Zeitrahmen aus Strategie oder Fallback zu '1h'
+              const timeframe = fullStrategyConfig?.timeframe || '1h';
+              // Lade letzte 100 Kerzen für MA-Berechnung
+              const candles = await binanceClient.candles({
+                symbol: position.symbol,
+                interval: timeframe,
+                limit: 100
+              });
+              
+              if (candles && candles.length > 0) {
+                priceHistory = candles.map(c => parseFloat(c.close));
+              }
+            } catch (err) {
+              console.warn(`⚠️  Konnte Preis-Historie für ${position.symbol} nicht laden:`, err.message);
+            }
+          }
+          
+          // Berechne MA-Werte wenn Historie vorhanden
+          if (priceHistory.length > 0 && fullStrategyConfig) {
+            const maShortPeriod = fullStrategyConfig.indicators?.ma_short ?? botSettings.default_indicators_ma_short;
+            const maLongPeriod = fullStrategyConfig.indicators?.ma_long ?? botSettings.default_indicators_ma_long;
+            
+            if (maShortPeriod && maLongPeriod) {
+              maShort = calculateMA(priceHistory, maShortPeriod);
+              maLong = calculateMA(priceHistory, maLongPeriod);
+              
+              // Verkaufspreis bei MA Cross: Wenn MA Short < MA Long wird, wird zum aktuellen Preis verkauft
+              // Wir zeigen den Preis, bei dem das Signal ausgelöst würde
+              if (maShort && maLong) {
+                // Wenn MA Short bereits unter MA Long ist, würde sofort verkauft werden
+                if (maShort < maLong) {
+                  maCrossSellPrice = currentPrice; // Würde sofort verkauft werden
+                } else {
+                  // Würde verkauft werden, wenn MA Short unter MA Long fällt
+                  // Schätzung: Preis würde etwa bei MA Long liegen
+                  maCrossSellPrice = maLong;
+                }
+              }
+            }
+          }
+          
+          // Berechne Stop Loss Preise
+          if (fullStrategyConfig?.risk) {
+            const stopLossPercent = fullStrategyConfig.risk.stop_loss_percent ?? 0;
+            useTrailingStop = fullStrategyConfig.risk.use_trailing_stop === true;
+            
+            if (stopLossPercent > 0) {
+              if (useTrailingStop) {
+                // Trailing Stop Loss: Verwende den aktuellen trailing_stop_price aus der Position
+                trailingStopPrice = position.trailing_stop_price 
+                  ? parseFloat(position.trailing_stop_price) 
+                  : null;
+                
+                // Wenn kein trailing_stop_price gesetzt ist, berechne initialen Wert
+                if (!trailingStopPrice && position.highest_price) {
+                  const highestPrice = parseFloat(position.highest_price);
+                  trailingStopPrice = highestPrice * (1 - stopLossPercent / 100);
+                } else if (!trailingStopPrice) {
+                  // Fallback: Berechne basierend auf Entry Price
+                  trailingStopPrice = entryPrice * (1 - stopLossPercent / 100);
+                }
+              } else {
+                // Statischer Stop Loss
+                stopLossPrice = entryPrice * (1 - stopLossPercent / 100);
+              }
+            }
+          }
+        } catch (configError) {
+          console.warn(`⚠️  Fehler beim Laden der Strategie-Konfiguration für ${position.symbol}:`, configError.message);
+        }
+      }
       
       allPositions.push({
         id: position.id,
@@ -1014,7 +1127,14 @@ app.get('/api/positions', async (req, res) => {
         pnlPercent: pnlPercent,
         strategyId: position.strategy_id,
         strategyName: strategyName,
-        createdAt: position.opened_at
+        createdAt: position.opened_at,
+        // Neue Felder für Verkaufsinformationen
+        maShort: maShort,
+        maLong: maLong,
+        maCrossSellPrice: maCrossSellPrice,
+        stopLossPrice: stopLossPrice,
+        trailingStopPrice: trailingStopPrice,
+        useTrailingStop: useTrailingStop
       });
       
       console.log(`📍 Position #${position.id} gefunden: ${position.symbol} | Strategie: ${strategyName} | Menge: ${quantity} | Entry: ${entryPrice} | Aktuell: ${currentPrice.toFixed(8)}`);

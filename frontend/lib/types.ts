@@ -22,12 +22,23 @@ export interface Trade {
 }
 
 export interface Position {
+  id?: string;
   symbol: string;
   quantity: number;
   entryPrice: number;
   currentPrice: number;
   pnl: number;
   pnlPercent: number;
+  strategyId?: string;
+  strategyName?: string;
+  createdAt?: string;
+  // Neue Felder für Verkaufsinformationen
+  maShort?: number | null;
+  maLong?: number | null;
+  maCrossSellPrice?: number | null;
+  stopLossPrice?: number | null;
+  trailingStopPrice?: number | null;
+  useTrailingStop?: boolean;
 }
 
 // Basis-Strategie (OHNE Coin-Zuordnung, nur Indikatoren)
