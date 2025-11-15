@@ -60,7 +60,7 @@ let tradingBotProcess = new Map(); // Map<symbol, WebSocket> - Mehrere WebSocket
 let activeStrategies = [];
 let priceHistories = new Map(); // Map<symbol, number[]> - Separate Preis-Historien pro Symbol
 let lastSignalTimes = new Map(); // Map<symbol, number> - Signal-Cooldown pro Symbol
-let lastTradeTime = 0; // Globaler Trade-Cooldown (bleibt global)
+let lastTradeTimes = new Map(); // Map<symbol, number> - Trade-Cooldown pro Symbol
 let tradesInProgress = new Map(); // Map<symbol, Promise> - Trade-Lock pro Symbol (verhindert Doppelausführungen)
 let tradeQueues = new Map(); // Map<symbol, Promise> - Queue für Trades pro Symbol (verhindert Race Conditions)
 let openPositions = new Map(); // Tracking offener Positionen (bereits symbol-spezifisch: ${strategy.id}_${symbol})
@@ -2722,7 +2722,7 @@ async function canTrade(signal, strategy) {
     }
   }
 
-  // Trade Cooldown prüfen (aus Strategie-Config)
+  // Trade Cooldown prüfen (aus Strategie-Config, pro Symbol)
   // HINWEIS: Diese Prüfung wird jetzt primär in executeTrade() durchgeführt,
   // um Race Conditions zu vermeiden. Hier bleibt sie als zusätzlicher Fallback.
   const now = Date.now();
@@ -2731,12 +2731,15 @@ async function canTrade(signal, strategy) {
     console.error(`❌ FEHLER: trade_cooldown_ms nicht in Strategie ${strategy.name} konfiguriert!`);
     return { allowed: false, reason: 'Konfigurationsfehler: trade_cooldown_ms fehlt' };
   }
+  
+  // Pro-Coin Trade-Cooldown prüfen
+  const lastTradeTime = lastTradeTimes.get(symbol) || 0;
   const cooldownRemaining = tradeCooldown - (now - lastTradeTime);
   
   if (cooldownRemaining > 0) {
     const waitTime = Math.round(cooldownRemaining / 1000);
-    const reason = `Trade Cooldown aktiv - Warte noch ${waitTime}s (${Math.round(waitTime / 60)} Minuten)`;
-    console.log(`⏳ TRADE COOLDOWN AKTIV - Warte noch ${waitTime}s (${Math.round(waitTime / 60)} Minuten)`);
+    const reason = `Trade Cooldown aktiv für ${symbol} - Warte noch ${waitTime}s (${Math.round(waitTime / 60)} Minuten)`;
+    console.log(`⏳ TRADE COOLDOWN AKTIV für ${symbol} - Warte noch ${waitTime}s (${Math.round(waitTime / 60)} Minuten)`);
     return { allowed: false, reason: reason };
   }
 
@@ -2849,7 +2852,7 @@ async function executeTrade(signal, strategy) {
   tradeQueues.set(symbol, tradePromise);
   
   try {
-    // KRITISCH: Cooldown prüfen (ohne zu setzen)
+    // KRITISCH: Cooldown prüfen (pro Symbol, ohne zu setzen)
     // Die Queue verhindert bereits Race Conditions, da nur ein Trade gleichzeitig pro Symbol ausgeführt wird
     const now = Date.now();
     const tradeCooldown = strategy.config.settings?.trade_cooldown_ms;
@@ -2860,11 +2863,13 @@ async function executeTrade(signal, strategy) {
       return null;
     }
     
+    // Pro-Coin Trade-Cooldown prüfen
+    const lastTradeTime = lastTradeTimes.get(symbol) || 0;
     const cooldownRemaining = tradeCooldown - (now - lastTradeTime);
     if (cooldownRemaining > 0) {
       const waitTime = Math.round(cooldownRemaining / 1000);
-      const reason = `Trade Cooldown aktiv - Warte noch ${waitTime}s (${Math.round(waitTime / 60)} Minuten)`;
-      console.log(`⏳ TRADE COOLDOWN AKTIV - Warte noch ${waitTime}s (${Math.round(waitTime / 60)} Minuten)`);
+      const reason = `Trade Cooldown aktiv für ${symbol} - Warte noch ${waitTime}s (${Math.round(waitTime / 60)} Minuten)`;
+      console.log(`⏳ TRADE COOLDOWN AKTIV für ${symbol} - Warte noch ${waitTime}s (${Math.round(waitTime / 60)} Minuten)`);
       resolveTrade();
       tradeQueues.delete(symbol);
       console.log(`⚠️  Trade nicht ausgeführt: ${reason}`);
@@ -3120,9 +3125,9 @@ async function executeTrade(signal, strategy) {
     // Trade in Datenbank speichern
     await saveTradeToDatabase(order, signal, strategy);
 
-    // WICHTIG: Cooldown erst NACH erfolgreicher Order-Platzierung setzen
+    // WICHTIG: Cooldown erst NACH erfolgreicher Order-Platzierung setzen (pro Symbol)
     // Dies stellt sicher, dass der Cooldown nur gesetzt wird, wenn ein Trade tatsächlich ausgeführt wurde
-    lastTradeTime = Date.now();
+    lastTradeTimes.set(symbol, Date.now());
 
     // Trade-Queue auflösen und freigeben
     resolveTrade();
@@ -4027,10 +4032,10 @@ function stopTradingBot() {
   tradingBotProcess.clear();
   priceHistories.clear();
   lastSignalTimes.clear();
+  lastTradeTimes.clear();
   tradesInProgress.clear();
   tradeQueues.clear();
   activeStrategies = [];
-  lastTradeTime = 0;
   
   botStatus = 'gestoppt';
   
