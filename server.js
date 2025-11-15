@@ -2685,9 +2685,6 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
     // Berechne Preisänderung in Prozent (relativ zum Entry Price)
     const priceChangePercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
 
-    // DEBUG: Log Position-Check
-    console.log(`🔍 Position-Check [${symbol}]: Entry=${position.entryPrice}, Current=${currentPrice}, TrailingStop=${position.trailingStopPrice}, UseTrailing=${useTrailingStop}`);
-
     // TRAILING STOP LOSS LOGIK
     if (useTrailingStop && stopLossPercent > 0) {
       // Initialisiere Trailing Stop Felder falls nicht vorhanden
@@ -2711,6 +2708,12 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
         if (!trailingStopPrice || highestPrice > oldHighestPrice) {
           const oldTrailingStopPrice = trailingStopPrice;
           trailingStopPrice = highestPrice * (1 - stopLossPercent / 100);
+          
+          // Validiere dass Berechnung erfolgreich war
+          if (!trailingStopPrice || isNaN(trailingStopPrice)) {
+            console.error(`❌ Fehler beim Berechnen des Trailing Stop für ${symbol}: highestPrice=${highestPrice}, stopLossPercent=${stopLossPercent}`);
+            continue; // Überspringe diese Position
+          }
           
           // Log wenn Trailing Stop aktualisiert wird
           if (!oldTrailingStopPrice) {
@@ -3581,6 +3584,14 @@ async function executeTrade(signal, strategy) {
     
     if (isInsufficientBalance && signal.action === 'sell') {
       console.log('🔍 "Insufficient Balance" Fehler erkannt - Prüfe Binance-Guthaben...');
+      
+      const positionKey = `${strategy.id}_${symbol}`;
+      
+      // Entferne Position aus In-Memory Map (falls noch vorhanden)
+      if (openPositions.has(positionKey)) {
+        openPositions.delete(positionKey);
+        console.log(`🗑️  Position aus In-Memory Map entfernt: ${positionKey}`);
+      }
       
       // Synchronisiere Position mit Binance
       const syncResult = await syncPositionWithBinance(strategy.id, symbol);
