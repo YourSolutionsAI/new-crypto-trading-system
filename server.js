@@ -211,11 +211,23 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
  * @param {number} quantity - Verkaufte Menge
  * @returns {Object} Ergebnis mit entry_price für PnL-Berechnung
  */
-async function reduceOrClosePosition(strategyId, symbol, quantity) {
+async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 0) {
   try {
-    console.log(`📊 Reduziere/Schließe Position: ${symbol} - ${quantity}`);
+    // Verhindere Endlosschleifen bei Retries
+    if (retryCount > 1) {
+      console.error(`❌ Max. Retry-Limit erreicht für Position-Update: ${symbol}`);
+      throw new Error('Max. Retry-Limit erreicht');
+    }
     
-    // Hole aktuelle Position
+    if (retryCount > 0) {
+      console.log(`🔄 Retry ${retryCount}: Reduziere/Schließe Position: ${symbol} - ${quantity}`);
+    } else {
+      console.log(`📊 Reduziere/Schließe Position: ${symbol} - ${quantity}`);
+    }
+    
+    // SCHICHT 3: Atomic Position-Update
+    // Hole aktuelle Position mit Lock (FOR UPDATE würde hier helfen, aber Supabase unterstützt das nicht direkt)
+    // Stattdessen verwenden wir einen Optimistic Lock mit WHERE-Clause
     const { data: position, error: fetchError } = await supabase
       .from('positions')
       .select('*')
@@ -233,52 +245,100 @@ async function reduceOrClosePosition(strategyId, symbol, quantity) {
       };
     }
     
-    const remainingQuantity = position.quantity - quantity;
+    const currentQuantity = parseFloat(position.quantity);
+    const requestedQuantity = parseFloat(quantity);
+    
+    // Prüfe ob genug Position vorhanden ist
+    if (currentQuantity < requestedQuantity) {
+      console.warn(`⚠️  Nicht genug Position vorhanden: ${currentQuantity} < ${requestedQuantity}`);
+      return {
+        action: 'no_position',
+        entry_price: parseFloat(position.entry_price),
+        remaining_quantity: currentQuantity
+      };
+    }
+    
+    const remainingQuantity = currentQuantity - requestedQuantity;
+    const entryPrice = parseFloat(position.entry_price);
+    
+    // Atomic Update: Update nur wenn Quantity noch gleich ist (verhindert Race Conditions)
+    const updateData = {
+      quantity: remainingQuantity,
+      updated_at: new Date().toISOString()
+    };
     
     if (remainingQuantity <= 0.00000001) {
       // Position komplett schließen
-      const { error: updateError } = await supabase
+      updateData.status = 'closed';
+      updateData.closed_at = new Date().toISOString();
+      updateData.quantity = 0;
+    } else {
+      updateData.status = 'partial';
+    }
+    
+    // WICHTIG: Atomic Update mit WHERE-Clause für Quantity-Check
+    // Dies verhindert Race Conditions: Update nur wenn Quantity noch gleich ist
+    const { data: updatedPosition, error: updateError } = await supabase
+      .from('positions')
+      .update(updateData)
+      .eq('id', position.id)
+      .eq('quantity', currentQuantity) // Atomic: Nur updaten wenn Quantity noch gleich ist
+      .select()
+      .single();
+    
+    if (updateError || !updatedPosition) {
+      // Race Condition erkannt - Position wurde zwischenzeitlich geändert
+      console.warn(`⚠️  Race Condition erkannt: Position wurde zwischenzeitlich geändert - Retry`);
+      // Retry: Lade Position neu und versuche nochmal (max. 1 Retry)
+      const retryPosition = await supabase
         .from('positions')
-        .update({
-          quantity: 0,
-          status: 'closed',
-          closed_at: new Date().toISOString(),
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', position.id);
+        .select('*')
+        .eq('strategy_id', strategyId)
+        .eq('symbol', symbol)
+        .eq('status', 'open')
+        .single();
       
-      if (updateError) throw updateError;
-      
+      if (retryPosition.data) {
+        const retryCurrentQty = parseFloat(retryPosition.data.quantity);
+        if (retryCurrentQty >= requestedQuantity) {
+          // Versuche nochmal mit aktualisierten Werten (mit Retry-Counter)
+          return await reduceOrClosePosition(strategyId, symbol, quantity, retryCount + 1);
+        } else {
+          // Nicht genug Position mehr vorhanden
+          return {
+            action: 'no_position',
+            entry_price: parseFloat(retryPosition.data.entry_price),
+            remaining_quantity: retryCurrentQty
+          };
+        }
+      } else {
+        // Position existiert nicht mehr
+        return {
+          action: 'no_position',
+          entry_price: entryPrice,
+          remaining_quantity: 0
+        };
+      }
+    }
+    
+    // Update erfolgreich
+    const positionKey = `${strategyId}_${symbol}`;
+    
+    if (remainingQuantity <= 0.00000001) {
       console.log(`✅ Position geschlossen: ${symbol}`);
-      
       // Entferne aus der In-Memory Map
-      const positionKey = `${strategyId}_${symbol}`;
       if (openPositions.has(positionKey)) {
         openPositions.delete(positionKey);
       }
       
       return {
         action: 'closed',
-        entry_price: position.entry_price,
+        entry_price: entryPrice,
         remaining_quantity: 0
       };
     } else {
-      // Position teilweise reduzieren
-      const { error: updateError } = await supabase
-        .from('positions')
-        .update({
-          quantity: remainingQuantity,
-          status: 'partial',
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', position.id);
-      
-      if (updateError) throw updateError;
-      
       console.log(`✅ Position reduziert: ${symbol} - Verbleibend: ${remainingQuantity}`);
-      
       // Update In-Memory Map
-      const positionKey = `${strategyId}_${symbol}`;
       if (openPositions.has(positionKey)) {
         const memPosition = openPositions.get(positionKey);
         memPosition.quantity = remainingQuantity;
@@ -286,7 +346,7 @@ async function reduceOrClosePosition(strategyId, symbol, quantity) {
       
       return {
         action: 'reduced',
-        entry_price: position.entry_price,
+        entry_price: entryPrice,
         remaining_quantity: remainingQuantity
       };
     }
@@ -2836,6 +2896,35 @@ async function executeTrade(signal, strategy) {
     console.log(`🔢 Menge: ${quantity}`);
     console.log(`💵 Wert: ~${(signal.price * quantity).toFixed(2)} USDT`);
 
+    // SCHICHT 1: Idempotenz-Check VOR Order-Platzierung
+    // Prüfe ob bereits ein identischer Trade existiert (innerhalb der letzten 5 Sekunden)
+    const recentTradeCheck = await supabase
+      .from('trades')
+      .select('id, order_id, created_at')
+      .eq('strategy_id', strategy.id)
+      .eq('symbol', symbol)
+      .eq('side', signal.action)
+      .gte('created_at', new Date(Date.now() - 5000).toISOString()) // Letzte 5 Sekunden
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    
+    if (recentTradeCheck.data) {
+      const timeDiff = Math.round((Date.now() - new Date(recentTradeCheck.data.created_at).getTime()) / 1000);
+      const reason = `Idempotenz-Check: Identischer Trade wurde bereits vor ${timeDiff}s ausgeführt (Order ID: ${recentTradeCheck.data.order_id || 'N/A'})`;
+      console.log(`⚠️  ${reason}`);
+      await logBotEvent('warning', `Trade abgelehnt: Idempotenz-Check`, {
+        symbol: symbol,
+        strategy_id: strategy.id,
+        side: signal.action,
+        existing_order_id: recentTradeCheck.data.order_id,
+        time_diff_seconds: timeDiff
+      });
+      resolveTrade();
+      tradeQueues.delete(symbol);
+      return null;
+    }
+
     // Order auf Binance Testnet platzieren
     const order = await binanceClient.order({
       symbol: symbol,
@@ -2843,6 +2932,30 @@ async function executeTrade(signal, strategy) {
       type: 'MARKET',
       quantity: quantity.toString()
     });
+
+    // SCHICHT 2: Idempotenz-Check NACH Order-Platzierung
+    // Prüfe ob Order-ID bereits in DB existiert (falls Order bereits verarbeitet wurde)
+    const existingOrderCheck = await supabase
+      .from('trades')
+      .select('id, strategy_id, symbol, side, created_at')
+      .eq('order_id', order.orderId.toString())
+      .maybeSingle();
+    
+    if (existingOrderCheck.data) {
+      const reason = `Order-ID ${order.orderId} wurde bereits verarbeitet - überspringe DB-Speicherung`;
+      console.log(`⚠️  ${reason}`);
+      console.log(`   Vorhandener Trade: ${existingOrderCheck.data.symbol} ${existingOrderCheck.data.side} (ID: ${existingOrderCheck.data.id})`);
+      await logBotEvent('warning', `Duplikat erkannt: Order-ID bereits verarbeitet`, {
+        order_id: order.orderId.toString(),
+        existing_trade_id: existingOrderCheck.data.id,
+        symbol: symbol,
+        strategy_id: strategy.id
+      });
+      // Order wurde bereits verarbeitet - überspringe DB-Speicherung und Position-Update
+      resolveTrade();
+      tradeQueues.delete(symbol);
+      return order; // Gebe Order zurück, aber speichere nicht nochmal
+    }
 
     // Durchschnittspreis berechnen
     const avgPrice = order.fills && order.fills.length > 0
@@ -3084,6 +3197,8 @@ async function saveTradeToDatabase(order, signal, strategy) {
       }
     }
 
+    // SCHICHT 4: Database-Level Idempotenz (UNIQUE Constraint auf order_id)
+    // Versuche Trade einzufügen - falls order_id bereits existiert, wird ein Fehler zurückgegeben
     const { data, error } = await supabase
       .from('trades')
       .insert({
@@ -3112,12 +3227,25 @@ async function saveTradeToDatabase(order, signal, strategy) {
       .select();
 
     if (error) {
-      console.error('❌ Fehler beim Speichern in Datenbank:', error.message);
-      await logBotEvent('error', 'Fehler beim Speichern des Trades in Datenbank', {
-        error: error.message,
-        orderId: order.orderId,
-        symbol: symbol
-      });
+      // Prüfe ob Fehler durch Duplikat verursacht wurde (UNIQUE Constraint Verletzung)
+      if (error.code === '23505' || error.message.includes('duplicate') || error.message.includes('unique')) {
+        console.warn(`⚠️  Trade bereits in Datenbank vorhanden (Order-ID: ${order.orderId}) - überspringe`);
+        await logBotEvent('warning', `Duplikat erkannt: Trade bereits in DB`, {
+          order_id: order.orderId.toString(),
+          symbol: symbol,
+          strategy_id: strategy.id,
+          error_code: error.code
+        });
+        return null; // Trade bereits vorhanden - kein Fehler, aber auch kein neuer Eintrag
+      } else {
+        console.error('❌ Fehler beim Speichern in Datenbank:', error.message);
+        await logBotEvent('error', 'Fehler beim Speichern des Trades in Datenbank', {
+          error: error.message,
+          error_code: error.code,
+          orderId: order.orderId,
+          symbol: symbol
+        });
+      }
     } else {
       // WICHTIG: Deutliches Logging für Render-Logs
       console.log('═══════════════════════════════════════════════');
