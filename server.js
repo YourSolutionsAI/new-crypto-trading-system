@@ -2685,6 +2685,9 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
     // Berechne Preisänderung in Prozent (relativ zum Entry Price)
     const priceChangePercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
 
+    // DEBUG: Log Position-Check
+    console.log(`🔍 Position-Check [${symbol}]: Entry=${position.entryPrice}, Current=${currentPrice}, TrailingStop=${position.trailingStopPrice}, UseTrailing=${useTrailingStop}`);
+
     // TRAILING STOP LOSS LOGIK
     if (useTrailingStop && stopLossPercent > 0) {
       // Initialisiere Trailing Stop Felder falls nicht vorhanden
@@ -3420,8 +3423,9 @@ async function executeTrade(signal, strategy) {
           const newHighestPrice = Math.max(oldHighestPrice, newAvgPrice);
           
           // Berechne neuen Trailing Stop Preis (wenn Trailing aktiv)
+          // WICHTIG: Nur setzen wenn keine Aktivierungsschwelle vorhanden ist
           let newTrailingStopPrice = existingPos.trailingStopPrice;
-          if (useTrailingStop && stopLossPercent > 0) {
+          if (useTrailingStop && stopLossPercent > 0 && activationThreshold === 0) {
             newTrailingStopPrice = newHighestPrice * (1 - stopLossPercent / 100);
           }
           
@@ -3446,7 +3450,8 @@ async function executeTrade(signal, strategy) {
         } else {
           // Neue Position
           const initialHighestPrice = avgPrice;
-          const initialTrailingStopPrice = useTrailingStop && stopLossPercent > 0
+          // WICHTIG: Trailing Stop nur setzen wenn keine Aktivierungsschwelle gesetzt ist
+          const initialTrailingStopPrice = useTrailingStop && stopLossPercent > 0 && activationThreshold === 0
             ? initialHighestPrice * (1 - stopLossPercent / 100)
             : null;
           
