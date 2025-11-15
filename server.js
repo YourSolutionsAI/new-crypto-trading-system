@@ -1525,8 +1525,7 @@ function formatDuration(createdAt) {
  */
 function validateBotSettings(settings) {
   const requiredSettings = [
-    'trade_cooldown_ms',
-    'signal_cooldown_ms',
+    // Hinweis: trade_cooldown_ms und signal_cooldown_ms werden jetzt pro Coin konfiguriert (in coin_strategies.config.settings)
     'max_concurrent_trades',
     'default_trade_size_usdt',
     'signal_threshold_percent',

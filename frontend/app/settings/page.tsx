@@ -120,30 +120,6 @@ export default function SettingsPage() {
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700">
-                    Trade Cooldown (ms)
-                  </label>
-                  <input
-                    type="number"
-                    value={getSettingValue('trade_cooldown_ms')}
-                    onChange={(e) => updateSetting('trade_cooldown_ms', parseInt(e.target.value) || 0)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                  />
-                  <p className="mt-1 text-xs text-gray-500">Hinweis: Trade Cooldown wird pro Coin konfiguriert. Diese Einstellung dient nur als Fallback.</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">
-                    Signal Cooldown (ms)
-                  </label>
-                  <input
-                    type="number"
-                    value={getSettingValue('signal_cooldown_ms')}
-                    onChange={(e) => updateSetting('signal_cooldown_ms', parseInt(e.target.value) || 0)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                  />
-                  <p className="mt-1 text-xs text-gray-500">Pause zwischen Signalen in Millisekunden</p>
-                </div>
-                <div>
-                  <label className="block text-sm font-medium text-gray-700">
                     Signal Threshold (%)
                   </label>
                   <input
