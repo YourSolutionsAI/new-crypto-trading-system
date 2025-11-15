@@ -2663,6 +2663,8 @@ async function canTrade(signal, strategy) {
   }
 
   // Trade Cooldown prüfen (aus Strategie-Config)
+  // HINWEIS: Diese Prüfung wird jetzt primär in executeTrade() durchgeführt,
+  // um Race Conditions zu vermeiden. Hier bleibt sie als zusätzlicher Fallback.
   const now = Date.now();
   const tradeCooldown = strategy.config.settings?.trade_cooldown_ms;
   if (tradeCooldown === undefined || tradeCooldown === null) {
@@ -2787,7 +2789,32 @@ async function executeTrade(signal, strategy) {
   tradeQueues.set(symbol, tradePromise);
   
   try {
-    // Trading-Checks durchführen
+    // KRITISCH: Cooldown atomar prüfen und setzen, BEVOR weitere Checks durchgeführt werden
+    // Dies verhindert Race Conditions, wenn mehrere Signale gleichzeitig eintreffen
+    const now = Date.now();
+    const tradeCooldown = strategy.config.settings?.trade_cooldown_ms;
+    if (tradeCooldown === undefined || tradeCooldown === null) {
+      console.error(`❌ FEHLER: trade_cooldown_ms nicht in Strategie ${strategy.name} konfiguriert!`);
+      resolveTrade();
+      tradeQueues.delete(symbol);
+      return null;
+    }
+    
+    const cooldownRemaining = tradeCooldown - (now - lastTradeTime);
+    if (cooldownRemaining > 0) {
+      const waitTime = Math.round(cooldownRemaining / 1000);
+      const reason = `Trade Cooldown aktiv - Warte noch ${waitTime}s (${Math.round(waitTime / 60)} Minuten)`;
+      console.log(`⏳ TRADE COOLDOWN AKTIV - Warte noch ${waitTime}s (${Math.round(waitTime / 60)} Minuten)`);
+      resolveTrade();
+      tradeQueues.delete(symbol);
+      console.log(`⚠️  Trade nicht ausgeführt: ${reason}`);
+      return null;
+    }
+    
+    // Cooldown SOFORT setzen (atomar), um Race Conditions zu vermeiden
+    lastTradeTime = now;
+
+    // Trading-Checks durchführen (Cooldown wurde bereits geprüft und gesetzt)
     const tradeCheck = await canTrade(signal, strategy);
     if (!tradeCheck.allowed) {
       // Trade-Queue auflösen und freigeben
@@ -2795,11 +2822,10 @@ async function executeTrade(signal, strategy) {
       tradeQueues.delete(symbol);
       // Logge warum Trade nicht ausgeführt wird
       console.log(`⚠️  Trade nicht ausgeführt: ${tradeCheck.reason}`);
+      // WICHTIG: Cooldown zurücksetzen, wenn Trade aus anderen Gründen abgelehnt wurde
+      // (nur wenn der Grund NICHT Cooldown war - das haben wir schon geprüft)
       return null;
     }
-
-    // Cooldown setzen
-    lastTradeTime = Date.now(); // Globaler Cooldown bleibt
 
     console.log('');
     console.log('═══════════════════════════════════════════════');
