@@ -72,3 +72,22 @@ export interface Strategy {
   updated_at: string;
 }
 
+export interface Balance {
+  asset: string;
+  free: number;
+  locked: number;
+  total: number;
+}
+
+export interface TestnetBalance {
+  success: boolean;
+  balances: Balance[];
+  usdt: {
+    free: number;
+    locked: number;
+    total: number;
+  } | null;
+  testnet: boolean;
+  timestamp: string;
+}
+

@@ -1,7 +1,7 @@
 // API Client für Backend-Integration
 
 import axios from 'axios';
-import type { BotStatus, Trade, Position, Strategy } from './types';
+import type { BotStatus, Trade, Position, Strategy, TestnetBalance } from './types';
 
 const API_URL = 
   typeof window !== 'undefined' 
@@ -245,5 +245,25 @@ export const updateBotSettings = async (
   settings: Partial<BotSettings>
 ): Promise<void> => {
   await api.put('/api/bot-settings', { settings });
+};
+
+/**
+ * Lädt das Testnet-Guthaben von Binance
+ * @returns TestnetBalance mit allen Guthaben und USDT-Informationen
+ */
+export const getTestnetBalance = async (): Promise<TestnetBalance> => {
+  try {
+    const response = await api.get('/api/testnet-balance');
+    return response.data;
+  } catch (error) {
+    console.error('Fehler beim Laden des Testnet-Guthabens:', error);
+    return {
+      success: false,
+      balances: [],
+      usdt: null,
+      testnet: true,
+      timestamp: new Date().toISOString()
+    };
+  }
 };
 

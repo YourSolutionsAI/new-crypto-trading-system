@@ -261,6 +261,16 @@ const TRADE_COOLDOWN = 300000;  // 5 Minuten (in Millisekunden)
 - Erhöhen Sie `max_concurrent_trades` in der Strategie-Config
 - Oder warten Sie, bis Positionen geschlossen werden
 
+### Problem: "Account has insufficient balance for requested action" (Code -2010)
+**Lösung:**
+1. **Testnet-Guthaben prüfen:** Gehen Sie zu https://testnet.binance.vision/ und loggen Sie sich ein
+2. **Faucet nutzen:** Holen Sie sich mehr Testnet-Tokens über den Faucet
+3. **Dashboard prüfen:** Das Dashboard zeigt jetzt das verfügbare USDT-Guthaben an
+4. **Balance-Check:** Der Bot prüft automatisch das Guthaben vor jeder BUY-Order
+5. **Warnung:** Bei weniger als 100 USDT wird eine Warnung im Dashboard angezeigt
+
+**Wichtig:** Auch im Testnet kann das Guthaben ausgehen! Der Bot prüft jetzt automatisch das verfügbare Guthaben und verhindert Orders bei unzureichendem Guthaben.
+
 ---
 
 ## 🎓 Was der Bot jetzt kann
@@ -279,12 +289,15 @@ const TRADE_COOLDOWN = 300000;  // 5 Minuten (in Millisekunden)
 - ✅ Max. gleichzeitige Trades
 - ✅ Position-Tracking (nur verkaufen wenn gekauft)
 - ✅ Quantity-Berechnung basierend auf Config
+- ✅ **Balance-Prüfung vor BUY-Orders** 🆕 (verhindert "insufficient balance" Fehler)
 
 ### Logging & Monitoring:
 - ✅ Alle Trades in `trades` Tabelle
 - ✅ Fehler in `bot_logs` Tabelle
 - ✅ PnL-Berechnung bei jedem SELL
 - ✅ Performance-Views in Supabase
+- ✅ **Testnet-Guthaben im Dashboard sichtbar** 🆕
+- ✅ **Automatische Balance-Prüfung mit Warnungen** 🆕
 
 ---
 

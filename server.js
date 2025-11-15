@@ -846,6 +846,53 @@ app.get('/api/positions', async (req, res) => {
 });
 
 /**
+ * Gibt Testnet-Guthaben zurück
+ */
+app.get('/api/testnet-balance', async (req, res) => {
+  try {
+    if (!binanceClient) {
+      return res.status(400).json({ 
+        error: 'Binance Client nicht verfügbar',
+        testnet: true 
+      });
+    }
+    
+    const accountInfo = await binanceClient.accountInfo();
+    const balances = accountInfo.balances
+      .filter(b => parseFloat(b.free) > 0 || parseFloat(b.locked) > 0)
+      .map(b => ({
+        asset: b.asset,
+        free: parseFloat(b.free),
+        locked: parseFloat(b.locked),
+        total: parseFloat(b.free) + parseFloat(b.locked)
+      }))
+      .sort((a, b) => b.total - a.total); // Sortiere nach Gesamtbetrag
+    
+    // Finde USDT-Balance separat für einfachen Zugriff
+    const usdtBalance = balances.find(b => b.asset === 'USDT');
+    
+    res.json({
+      success: true,
+      balances: balances,
+      usdt: usdtBalance ? {
+        free: usdtBalance.free,
+        locked: usdtBalance.locked,
+        total: usdtBalance.total
+      } : null,
+      testnet: true,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Fehler beim Abrufen des Testnet-Guthabens:', error);
+    res.status(500).json({
+      error: error.message,
+      code: error.code,
+      testnet: true
+    });
+  }
+});
+
+/**
  * Gibt Performance-Metriken zurück
  */
 app.get('/api/performance', async (req, res) => {
@@ -1936,6 +1983,67 @@ async function canTrade(signal, strategy) {
     const reason = 'Binance Client nicht verfügbar';
     console.log(`⚠️  ${reason}`);
     return { allowed: false, reason: reason };
+  }
+
+  // NEU: Bei BUY-Orders: Prüfe verfügbares USDT-Guthaben (auch im Testnet!)
+  if (signal.action === 'buy') {
+    try {
+      const accountInfo = await binanceClient.accountInfo();
+      const usdtBalance = accountInfo.balances.find(b => b.asset === 'USDT');
+      
+      if (!usdtBalance) {
+        const reason = 'Kein USDT-Guthaben gefunden im Testnet';
+        console.log(`⚠️  ${reason}`);
+        console.log(`💡 Tipp: Gehen Sie zu https://testnet.binance.vision/ und holen Sie Testnet-Tokens!`);
+        await logBotEvent('warning', `BUY-Order abgelehnt: Kein USDT-Guthaben`, {
+          symbol: symbol,
+          strategy_id: strategy.id,
+          testnet: true
+        });
+        return { allowed: false, reason: reason };
+      }
+      
+      const availableUSDT = parseFloat(usdtBalance.free);
+      const quantity = calculateQuantity(signal.price, symbol, strategy);
+      
+      if (!quantity || quantity <= 0) {
+        const reason = 'Fehler bei der Mengenberechnung';
+        console.log(`⚠️  ${reason}`);
+        return { allowed: false, reason: reason };
+      }
+      
+      const requiredUSDT = signal.price * quantity;
+      
+      // Puffer von 1% für Gebühren und Preisänderungen
+      const requiredWithBuffer = requiredUSDT * 1.01;
+      
+      if (availableUSDT < requiredWithBuffer) {
+        const reason = `Unzureichendes USDT-Guthaben im Testnet: Verfügbar: ${availableUSDT.toFixed(2)} USDT, Benötigt: ~${requiredWithBuffer.toFixed(2)} USDT`;
+        console.log(`⚠️  ${reason}`);
+        console.log(`💡 Tipp: Gehen Sie zu https://testnet.binance.vision/ und holen Sie mehr Testnet-Tokens!`);
+        await logBotEvent('warning', `BUY-Order abgelehnt: Unzureichendes Testnet-Guthaben`, {
+          symbol: symbol,
+          available_usdt: availableUSDT,
+          required_usdt: requiredUSDT,
+          required_with_buffer: requiredWithBuffer,
+          strategy_id: strategy.id,
+          testnet: true
+        });
+        return { allowed: false, reason: reason };
+      }
+      
+      console.log(`💰 Testnet-Guthaben OK: ${availableUSDT.toFixed(2)} USDT verfügbar (Benötigt: ~${requiredWithBuffer.toFixed(2)} USDT)`);
+    } catch (error) {
+      console.error(`❌ Fehler beim Abrufen des Testnet-Guthabens: ${error.message}`);
+      // Bei Fehler: Trade ablehnen (sicherer)
+      await logBotEvent('error', `Fehler beim Balance-Check`, {
+        error: error.message,
+        error_code: error.code,
+        symbol: symbol,
+        strategy_id: strategy.id
+      });
+      return { allowed: false, reason: `Fehler beim Balance-Check: ${error.message}` };
+    }
   }
 
   // Trade Cooldown prüfen (aus Strategie-Config)
