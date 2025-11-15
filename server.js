@@ -3162,7 +3162,23 @@ async function canTrade(signal, strategy) {
 
   // Bei BUY: Prüfen ob bereits eine offene Position existiert
   if (signal.action === 'buy') {
-    // Check positions Tabelle
+    // KRITISCH: Prüfe zuerst In-Memory Map (schneller, verhindert Race Conditions)
+    const positionKey = `${strategy.id}_${symbol}`;
+    const memPosition = openPositions.get(positionKey);
+    
+    if (memPosition && memPosition.quantity > 0.0001) {
+      const reason = `Bereits eine offene Position in Memory: ${symbol} - ${memPosition.quantity} @ ${memPosition.entryPrice}`;
+      console.log(`⚠️  ${reason}`);
+      await logBotEvent('warning', `BUY-Signal ignoriert: Bereits offene Position (Memory)`, {
+        symbol: symbol,
+        quantity: memPosition.quantity,
+        entry_price: memPosition.entryPrice,
+        strategy_id: strategy.id
+      });
+      return { allowed: false, reason: reason };
+    }
+    
+    // Check positions Tabelle (als Fallback)
     const { data: existingPosition, error: posError } = await supabase
       .from('positions')
       .select('*')
@@ -3301,7 +3317,7 @@ async function executeTrade(signal, strategy) {
       return null;
     }
 
-    // Trading-Checks durchführen (Cooldown wurde bereits geprüft, wird aber erst nach erfolgreicher Order gesetzt)
+    // Trading-Checks durchführen (Cooldown wurde bereits geprüft)
     const tradeCheck = await canTrade(signal, strategy);
     if (!tradeCheck.allowed) {
       // Trade-Queue auflösen und freigeben
@@ -3311,6 +3327,11 @@ async function executeTrade(signal, strategy) {
       console.log(`⚠️  Trade nicht ausgeführt: ${tradeCheck.reason}`);
       return null;
     }
+
+    // KRITISCH: Cooldown SOFORT setzen VOR Order-Platzierung (verhindert Doppelausführungen)
+    // Falls Order fehlschlägt, wird Cooldown trotzdem gesetzt (verhindert Spam)
+    lastTradeTimes.set(symbol, Date.now());
+    console.log(`⏳ Trade-Cooldown gesetzt für ${symbol} (${Math.round(tradeCooldown / 1000)}s)`);
 
     console.log('');
     console.log('═══════════════════════════════════════════════');
@@ -3552,9 +3573,7 @@ async function executeTrade(signal, strategy) {
     // Trade in Datenbank speichern
     await saveTradeToDatabase(order, signal, strategy);
 
-    // WICHTIG: Cooldown erst NACH erfolgreicher Order-Platzierung setzen (pro Symbol)
-    // Dies stellt sicher, dass der Cooldown nur gesetzt wird, wenn ein Trade tatsächlich ausgeführt wurde
-    lastTradeTimes.set(symbol, Date.now());
+    // Cooldown wurde bereits VOR Order-Platzierung gesetzt (verhindert Doppelausführungen)
 
     // Trade-Queue auflösen und freigeben
     resolveTrade();
