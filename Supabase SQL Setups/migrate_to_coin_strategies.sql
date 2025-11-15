@@ -114,6 +114,7 @@ ON CONFLICT (name) DO NOTHING;
 
 -- Migriere bestehende Strategien zu coin_strategies
 -- Extrahiere Coin-spezifische Einstellungen aus strategies.config
+-- WICHTIG: ON CONFLICT verhindert Duplikat-Fehler bei mehrmaliger Ausführung
 INSERT INTO coin_strategies (symbol, strategy_id, active, config)
 SELECT 
   s.symbol,
@@ -125,9 +126,11 @@ SELECT
   ) as config
 FROM strategies s
 WHERE s.symbol IS NOT NULL
-  AND NOT EXISTS (
-    SELECT 1 FROM coin_strategies cs WHERE cs.symbol = s.symbol
-  );
+ON CONFLICT (symbol) DO UPDATE SET
+  strategy_id = EXCLUDED.strategy_id,
+  active = EXCLUDED.active,
+  config = EXCLUDED.config,
+  updated_at = NOW();
 
 -- ================================================================
 -- 4. STRATEGIEN BEREINIGEN: Entferne Coin-spezifische Daten
