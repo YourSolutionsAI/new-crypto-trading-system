@@ -82,6 +82,13 @@ let settingsReloadInterval = null; // Interval für automatisches Neuladen der E
  */
 async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
   try {
+    // DEBUG: Zeige eingehende Werte
+    console.log('🔍 DEBUG: openOrUpdatePosition - Eingehende Werte:');
+    console.log(`   quantity (RAW): ${quantity} (Typ: ${typeof quantity})`);
+    console.log(`   quantity (toString): ${quantity.toString()}`);
+    console.log(`   price (RAW): ${price} (Typ: ${typeof price})`);
+    console.log(`   price (toString): ${price.toString()}`);
+    
     console.log(`📊 Öffne/Erweitere Position: ${symbol} - ${quantity} @ ${price}`);
     
     // Hole Strategie-Config für Trailing Stop Einstellungen
@@ -137,6 +144,13 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
         updated_at: new Date().toISOString()
       };
       
+      // DEBUG: Zeige Update-Daten
+      console.log('🔍 DEBUG: Position erweitert - Daten die gespeichert werden:');
+      console.log(`   Alte quantity: ${existingPosition.quantity} (Typ: ${typeof existingPosition.quantity})`);
+      console.log(`   Neue quantity: ${updateData.quantity} (Typ: ${typeof updateData.quantity})`);
+      console.log(`   Hinzugefügte quantity: ${quantity} (Typ: ${typeof quantity})`);
+      console.log(`   entry_price: ${updateData.entry_price} (Typ: ${typeof updateData.entry_price})`);
+      
       // Update Trailing Stop Felder nur wenn Trailing aktiv
       if (useTrailingStop) {
         updateData.trailing_stop_price = newTrailingStopPrice;
@@ -152,6 +166,11 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
         .single();
       
       if (updateError) throw updateError;
+      
+      // DEBUG: Zeige was aus der DB zurückkommt
+      console.log('🔍 DEBUG: Position erweitert - Daten aus DB zurück:');
+      console.log(`   quantity: ${updatedPosition.quantity} (Typ: ${typeof updatedPosition.quantity})`);
+      console.log(`   entry_price: ${updatedPosition.entry_price} (Typ: ${typeof updatedPosition.entry_price})`);
       
       const trailingInfo = useTrailingStop 
         ? ` | Trailing Stop: ${newTrailingStopPrice.toFixed(6)} (Highest: ${newHighestPrice.toFixed(6)})`
@@ -177,6 +196,13 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
         highest_price: initialHighestPrice
       };
       
+      // DEBUG: Zeige Daten die gespeichert werden
+      console.log('🔍 DEBUG: Neue Position - Daten die gespeichert werden:');
+      console.log(`   quantity: ${insertData.quantity} (Typ: ${typeof insertData.quantity})`);
+      console.log(`   entry_price: ${insertData.entry_price} (Typ: ${typeof insertData.entry_price})`);
+      console.log(`   total_buy_quantity: ${insertData.total_buy_quantity} (Typ: ${typeof insertData.total_buy_quantity})`);
+      console.log(`   total_buy_value: ${insertData.total_buy_value} (Typ: ${typeof insertData.total_buy_value})`);
+      
       // Füge Trailing Stop Felder hinzu wenn aktiv
       if (useTrailingStop) {
         insertData.trailing_stop_price = initialTrailingStopPrice;
@@ -191,6 +217,13 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
         .single();
       
       if (insertError) throw insertError;
+      
+      // DEBUG: Zeige was aus der DB zurückkommt
+      console.log('🔍 DEBUG: Neue Position - Daten aus DB zurück:');
+      console.log(`   quantity: ${newPosition.quantity} (Typ: ${typeof newPosition.quantity})`);
+      console.log(`   entry_price: ${newPosition.entry_price} (Typ: ${typeof newPosition.entry_price})`);
+      console.log(`   total_buy_quantity: ${newPosition.total_buy_quantity} (Typ: ${typeof newPosition.total_buy_quantity})`);
+      console.log(`   total_buy_value: ${newPosition.total_buy_value} (Typ: ${typeof newPosition.total_buy_value})`);
       
       const trailingInfo = useTrailingStop 
         ? ` | Trailing Stop: ${initialTrailingStopPrice.toFixed(6)}`
@@ -469,9 +502,28 @@ async function syncPositionWithBinance(strategyId, symbol) {
     }
     
     const balance = accountInfo.balances.find(b => b.asset === baseAsset);
+    
+    // DEBUG: Zeige rohe Werte von Binance Balance
+    console.log('🔍 DEBUG: Rohe Werte von Binance Account Info:');
+    console.log(`   Gesuchtes Asset: ${baseAsset}`);
+    if (balance) {
+      console.log(`   balance.free (RAW): "${balance.free}" (Typ: ${typeof balance.free})`);
+      console.log(`   balance.locked (RAW): "${balance.locked}" (Typ: ${typeof balance.locked})`);
+      console.log(`   balance.asset: "${balance.asset}"`);
+    } else {
+      console.log(`   ⚠️  Kein Balance-Eintrag für ${baseAsset} gefunden!`);
+      console.log(`   Verfügbare Assets: ${accountInfo.balances.map(b => b.asset).join(', ')}`);
+    }
+    
     const actualBalance = balance ? parseFloat(balance.free) + parseFloat(balance.locked) : 0;
     
-    console.log(`📊 Binance Guthaben für ${baseAsset}: ${actualBalance} (Free: ${balance ? parseFloat(balance.free) : 0}, Locked: ${balance ? parseFloat(balance.locked) : 0})`);
+    console.log(`📊 Binance Guthaben für ${baseAsset}:`);
+    console.log(`   Free (RAW): "${balance ? balance.free : 'N/A'}"`);
+    console.log(`   Locked (RAW): "${balance ? balance.locked : 'N/A'}"`);
+    console.log(`   Free (geparst): ${balance ? parseFloat(balance.free) : 0}`);
+    console.log(`   Locked (geparst): ${balance ? parseFloat(balance.locked) : 0}`);
+    console.log(`   Gesamt (actualBalance): ${actualBalance}`);
+    console.log(`   Gesamt (toString): ${actualBalance.toString()}`);
     
     // Hole Position aus Datenbank
     const { data: position, error: posError } = await supabase
@@ -488,7 +540,15 @@ async function syncPositionWithBinance(strategyId, symbol) {
       return { synced: true, action: 'none', reason: 'Keine Position in DB' };
     }
     
+    // DEBUG: Zeige DB-Werte vor Parsing
+    console.log('🔍 DEBUG: Position aus DB - Rohe Werte:');
+    console.log(`   position.quantity (RAW): "${position.quantity}" (Typ: ${typeof position.quantity})`);
+    console.log(`   position.entry_price (RAW): "${position.entry_price}" (Typ: ${typeof position.entry_price})`);
+    
     const dbQuantity = parseFloat(position.quantity);
+    
+    console.log(`   position.quantity (geparst): ${dbQuantity}`);
+    console.log(`   position.quantity (toString): ${dbQuantity.toString()}`);
     
     // Hole Lot Size Info für minimale handelbare Menge
     let minTradeableQuantity = 0.0001; // Fallback
@@ -581,6 +641,12 @@ async function syncPositionWithBinance(strategyId, symbol) {
         };
       } else {
         // Aktualisiere Quantity auf tatsächliches Guthaben
+        console.log('🔍 DEBUG: Synchronisation - Update-Daten:');
+        console.log(`   Alte DB quantity: ${dbQuantity}`);
+        console.log(`   Neue quantity (actualBalance): ${actualBalance}`);
+        console.log(`   actualBalance (Typ): ${typeof actualBalance}`);
+        console.log(`   actualBalance (toString): ${actualBalance.toString()}`);
+        
         const { error: updateError } = await supabase
           .from('positions')
           .update({
@@ -3283,12 +3349,23 @@ async function executeTrade(signal, strategy) {
       ? order.fills.reduce((sum, fill) => sum + parseFloat(fill.price), 0) / order.fills.length
       : parseFloat(signal.price);
 
+    // DEBUG: Zeige rohe Werte von Binance
+    console.log('🔍 DEBUG: Rohe Werte von Binance Order:');
+    console.log(`   order.executedQty (RAW): "${order.executedQty}" (Typ: ${typeof order.executedQty})`);
+    console.log(`   order.executedQty (String): ${JSON.stringify(order.executedQty)}`);
+    if (order.fills && order.fills.length > 0) {
+      console.log(`   order.fills[0].qty (RAW): "${order.fills[0].qty}" (Typ: ${typeof order.fills[0].qty})`);
+      console.log(`   order.fills[0].price (RAW): "${order.fills[0].price}" (Typ: ${typeof order.fills[0].price})`);
+    }
+    
     const executedQty = parseFloat(order.executedQty);
     
     console.log(`✅ Order ausgeführt!`);
     console.log(`   Order ID: ${order.orderId}`);
     console.log(`   Status: ${order.status}`);
-    console.log(`   Ausgeführte Menge: ${executedQty}`);
+    console.log(`   Ausgeführte Menge (RAW von Binance): "${order.executedQty}"`);
+    console.log(`   Ausgeführte Menge (geparst): ${executedQty}`);
+    console.log(`   Ausgeführte Menge (toString): ${executedQty.toString()}`);
     console.log(`   Durchschnittspreis: ${avgPrice.toFixed(6)} USDT`);
     console.log('═══════════════════════════════════════════════');
     console.log('');
