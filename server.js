@@ -2789,8 +2789,8 @@ async function executeTrade(signal, strategy) {
   tradeQueues.set(symbol, tradePromise);
   
   try {
-    // KRITISCH: Cooldown atomar prüfen und setzen, BEVOR weitere Checks durchgeführt werden
-    // Dies verhindert Race Conditions, wenn mehrere Signale gleichzeitig eintreffen
+    // KRITISCH: Cooldown prüfen (ohne zu setzen)
+    // Die Queue verhindert bereits Race Conditions, da nur ein Trade gleichzeitig pro Symbol ausgeführt wird
     const now = Date.now();
     const tradeCooldown = strategy.config.settings?.trade_cooldown_ms;
     if (tradeCooldown === undefined || tradeCooldown === null) {
@@ -2810,11 +2810,8 @@ async function executeTrade(signal, strategy) {
       console.log(`⚠️  Trade nicht ausgeführt: ${reason}`);
       return null;
     }
-    
-    // Cooldown SOFORT setzen (atomar), um Race Conditions zu vermeiden
-    lastTradeTime = now;
 
-    // Trading-Checks durchführen (Cooldown wurde bereits geprüft und gesetzt)
+    // Trading-Checks durchführen (Cooldown wurde bereits geprüft, wird aber erst nach erfolgreicher Order gesetzt)
     const tradeCheck = await canTrade(signal, strategy);
     if (!tradeCheck.allowed) {
       // Trade-Queue auflösen und freigeben
@@ -2822,8 +2819,6 @@ async function executeTrade(signal, strategy) {
       tradeQueues.delete(symbol);
       // Logge warum Trade nicht ausgeführt wird
       console.log(`⚠️  Trade nicht ausgeführt: ${tradeCheck.reason}`);
-      // WICHTIG: Cooldown zurücksetzen, wenn Trade aus anderen Gründen abgelehnt wurde
-      // (nur wenn der Grund NICHT Cooldown war - das haben wir schon geprüft)
       return null;
     }
 
@@ -3011,6 +3006,10 @@ async function executeTrade(signal, strategy) {
 
     // Trade in Datenbank speichern
     await saveTradeToDatabase(order, signal, strategy);
+
+    // WICHTIG: Cooldown erst NACH erfolgreicher Order-Platzierung setzen
+    // Dies stellt sicher, dass der Cooldown nur gesetzt wird, wenn ein Trade tatsächlich ausgeführt wurde
+    lastTradeTime = Date.now();
 
     // Trade-Queue auflösen und freigeben
     resolveTrade();
