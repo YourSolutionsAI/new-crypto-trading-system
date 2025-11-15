@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getBotStatus, getPositions, getTrades, getStrategies, getTestnetBalance } from '@/lib/api';
-import type { BotStatus, Position, Trade, Strategy, TestnetBalance } from '@/lib/types';
+import { getBotStatus, getPositions, getTrades, getCoins, getTestnetBalance } from '@/lib/api';
+import type { BotStatus, Position, Trade, CoinStrategy, TestnetBalance } from '@/lib/types';
 import Link from 'next/link';
 import { format } from 'date-fns';
 
@@ -10,7 +10,7 @@ export default function Dashboard() {
   const [botStatus, setBotStatus] = useState<BotStatus | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [recentTrades, setRecentTrades] = useState<Trade[]>([]);
-  const [activeStrategies, setActiveStrategies] = useState<Strategy[]>([]);
+  const [activeStrategies, setActiveStrategies] = useState<CoinStrategy[]>([]);
   const [balance, setBalance] = useState<TestnetBalance | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -22,18 +22,18 @@ export default function Dashboard() {
 
   const loadData = async () => {
     try {
-      const [status, pos, tradesResult, strategies, balanceData] = await Promise.all([
+      const [status, pos, tradesResult, coinStrategies, balanceData] = await Promise.all([
         getBotStatus().catch(() => ({ status: 'stopped' as const, timestamp: new Date().toISOString() })),
         getPositions().catch(() => []),
         getTrades(10).catch(() => ({ trades: [], total: 0, limit: 10, offset: 0 })),
-        getStrategies().catch(() => []),
+        getCoins().catch(() => []),
         getTestnetBalance().catch(() => null),
       ]);
       setBotStatus(status);
       setPositions(pos);
       setRecentTrades(tradesResult.trades);
-      // Filtere nur aktive Strategien
-      setActiveStrategies(strategies.filter((s: Strategy) => s.is_active));
+      // Filtere nur aktive Coin-Strategien
+      setActiveStrategies(coinStrategies.filter((cs: CoinStrategy) => cs.active && cs.strategy_id !== null));
       setBalance(balanceData);
     } catch (error) {
       console.error('Fehler beim Laden der Daten:', error);
@@ -219,38 +219,23 @@ export default function Dashboard() {
         ) : (
           <div className="bg-white shadow overflow-hidden sm:rounded-md">
             <ul className="divide-y divide-gray-200">
-              {activeStrategies.map((strategy) => (
-                <li key={strategy.id} className="px-6 py-4">
+              {activeStrategies.map((coinStrategy) => (
+                <li key={coinStrategy.symbol} className="px-6 py-4">
                   <div className="flex items-center justify-between">
                     <div className="flex-1">
                       <div className="flex items-center">
                         <p className="text-sm font-medium text-gray-900">
-                          {strategy.name}
+                          {coinStrategy.strategy_name || 'Keine Strategie'}
                         </p>
                         <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
-                          {strategy.symbol}
+                          {coinStrategy.symbol}
                         </span>
                       </div>
-                      {strategy.description && (
+                      {coinStrategy.strategy_description && (
                         <p className="mt-1 text-sm text-gray-500">
-                          {strategy.description}
+                          {coinStrategy.strategy_description}
                         </p>
                       )}
-                      <div className="mt-2 flex gap-4 text-xs text-gray-500">
-                        <span>Trades: {strategy.total_trades || 0}</span>
-                        <span>Win Rate: {(strategy.win_rate || 0).toFixed(1)}%</span>
-                      </div>
-                    </div>
-                    <div className="ml-6 text-right">
-                      <p
-                        className={`text-sm font-medium ${
-                          (strategy.total_pnl || 0) >= 0 ? 'text-green-600' : 'text-red-600'
-                        }`}
-                      >
-                        {(strategy.total_pnl || 0) >= 0 ? '+' : ''}
-                        {(strategy.total_pnl || 0).toFixed(2)} USDT
-                      </p>
-                      <p className="text-xs text-gray-500 mt-1">Total PnL</p>
                     </div>
                   </div>
                 </li>
