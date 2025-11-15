@@ -2688,7 +2688,8 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
     // TRAILING STOP LOSS LOGIK
     if (useTrailingStop && stopLossPercent > 0) {
       // Initialisiere Trailing Stop Felder falls nicht vorhanden
-      let highestPrice = position.highestPrice ?? position.entryPrice;
+      const oldHighestPrice = position.highestPrice ?? position.entryPrice;
+      let highestPrice = oldHighestPrice;
       let trailingStopPrice = position.trailingStopPrice;
       const trailingActivationThreshold = position.trailingStopActivationThreshold ?? activationThreshold;
 
@@ -2704,8 +2705,16 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
         // Initialisiere oder aktualisiere Trailing Stop Preis
         // Wichtig: Wenn trailingStopPrice noch null ist (z.B. bei Aktivierungsschwelle), initialisiere es jetzt
         // Oder wenn highestPrice aktualisiert wurde, aktualisiere auch trailingStopPrice
-        if (!trailingStopPrice || currentPrice > (position.highestPrice ?? position.entryPrice)) {
+        if (!trailingStopPrice || highestPrice > oldHighestPrice) {
+          const oldTrailingStopPrice = trailingStopPrice;
           trailingStopPrice = highestPrice * (1 - stopLossPercent / 100);
+          
+          // Log wenn Trailing Stop aktualisiert wird
+          if (!oldTrailingStopPrice) {
+            console.log(`📈 Trailing Stop aktiviert für ${symbol}: ${trailingStopPrice.toFixed(8)} USDT (Highest: ${highestPrice.toFixed(8)})`);
+          } else if (highestPrice > oldHighestPrice) {
+            console.log(`📈 Trailing Stop angepasst für ${symbol}: ${oldTrailingStopPrice.toFixed(8)} → ${trailingStopPrice.toFixed(8)} USDT (Highest: ${oldHighestPrice.toFixed(8)} → ${highestPrice.toFixed(8)})`);
+          }
           
           // Update In-Memory Map
           position.highestPrice = highestPrice;
