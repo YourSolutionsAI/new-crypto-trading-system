@@ -4340,6 +4340,9 @@ async function createWebSocketConnection(symbol, strategies) {
             continue;
           }
 
+          // KRITISCH: Cooldown SOFORT setzen VOR Signal-Verarbeitung (verhindert Doppel-Signale)
+          lastSignalTimes.set(symbol, now);
+
           // Signal-Cooldown ist abgelaufen - Signal verarbeiten
           console.log('');
           console.log('═══════════════════════════════════════════════');
@@ -4358,11 +4361,18 @@ async function createWebSocketConnection(symbol, strategies) {
           // Signal in Datenbank loggen
           await logSignal(signal, strategy);
 
-          // Cooldown setzen (pro Symbol)
-          lastSignalTimes.set(symbol, now);
-
           // Order ausführen (wenn aktiviert)
           if (tradingEnabled && binanceClient) {
+            // KRITISCH: Bei BUY nochmal Position prüfen (verhindert Doppel-Käufe)
+            if (signal.action === 'buy') {
+              const positionKey = `${strategy.id}_${symbol}`;
+              const memPosition = openPositions.get(positionKey);
+              if (memPosition && memPosition.quantity > 0.0001) {
+                console.log(`⚠️  [${symbol}] BUY-Signal ignoriert: Bereits offene Position vorhanden (${memPosition.quantity} @ ${memPosition.entryPrice})`);
+                continue; // Überspringe dieses Signal
+              }
+            }
+            
             console.log(`🔄 [${symbol}] Versuche Trade auszuführen: ${signal.action.toUpperCase()} @ ${signal.price} USDT`);
             await logBotEvent('info', `Trade-Ausführung gestartet: ${signal.action.toUpperCase()}`, {
               action: signal.action,
