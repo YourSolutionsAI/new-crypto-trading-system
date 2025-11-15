@@ -83,7 +83,22 @@ VALUES
   ('logging_hold_log_interval', '50'::jsonb, 'Hold-Signal alle X Updates loggen'),
   
   -- Preis-Historie
-  ('max_price_history', '100'::jsonb, 'Maximale Anzahl gespeicherter Preise für MA-Berechnung')
+  ('max_price_history', '100'::jsonb, 'Maximale Anzahl gespeicherter Preise für MA-Berechnung'),
+  
+  -- Max Total Exposure (Gesamt-Exposure über alle Positionen)
+  ('max_total_exposure_usdt', '1000'::jsonb, 'Maximales Gesamt-Exposure über alle offenen Positionen in USDT'),
+  
+  -- Indikator-Defaults (werden verwendet wenn nicht in Strategie definiert)
+  ('default_indicators_ma_short', '20'::jsonb, 'Standard Moving Average Short Period'),
+  ('default_indicators_ma_long', '50'::jsonb, 'Standard Moving Average Long Period'),
+  ('default_indicators_rsi_period', '14'::jsonb, 'Standard RSI Period'),
+  ('default_indicators_rsi_overbought', '70'::jsonb, 'Standard RSI Overbought Level'),
+  ('default_indicators_rsi_oversold', '30'::jsonb, 'Standard RSI Oversold Level'),
+  ('default_indicators_macd_fast_period', '12'::jsonb, 'Standard MACD Fast Period'),
+  ('default_indicators_macd_slow_period', '26'::jsonb, 'Standard MACD Slow Period'),
+  ('default_indicators_macd_signal_period', '9'::jsonb, 'Standard MACD Signal Period'),
+  ('default_indicators_bollinger_period', '20'::jsonb, 'Standard Bollinger Bands Period'),
+  ('default_indicators_bollinger_std_dev', '2'::jsonb, 'Standard Bollinger Bands Standard Deviation')
 ON CONFLICT (key) DO UPDATE SET 
   value = EXCLUDED.value,
   updated_at = NOW();

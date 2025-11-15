@@ -815,6 +815,47 @@ function formatDuration(createdAt) {
 // ═══════════════════════════════════════════════
 
 /**
+ * Validiert ob alle erforderlichen Bot-Einstellungen vorhanden sind
+ * @param {Object} settings - Die geladenen Bot-Einstellungen
+ * @returns {Object} { valid: boolean, missing: string[] }
+ */
+function validateBotSettings(settings) {
+  const requiredSettings = [
+    'trade_cooldown_ms',
+    'signal_cooldown_ms',
+    'max_concurrent_trades',
+    'default_trade_size_usdt',
+    'signal_threshold_percent',
+    'max_price_history',
+    'max_total_exposure_usdt',
+    'logging_price_log_interval',
+    'logging_hold_log_interval',
+    'default_indicators_ma_short',
+    'default_indicators_ma_long',
+    'default_indicators_rsi_period',
+    'default_indicators_rsi_overbought',
+    'default_indicators_rsi_oversold',
+    'default_indicators_macd_fast_period',
+    'default_indicators_macd_slow_period',
+    'default_indicators_macd_signal_period',
+    'default_indicators_bollinger_period',
+    'default_indicators_bollinger_std_dev'
+  ];
+  
+  const missing = [];
+  requiredSettings.forEach(key => {
+    if (settings[key] === undefined || settings[key] === null) {
+      missing.push(key);
+    }
+  });
+  
+  return {
+    valid: missing.length === 0,
+    missing: missing
+  };
+}
+
+/**
  * Lädt Bot-Einstellungen von Supabase
  * @param {boolean} silent - Wenn true, werden weniger Logs ausgegeben (für Auto-Reload)
  */
@@ -851,11 +892,29 @@ async function loadBotSettings(silent = false) {
         const symbol = key.replace('lot_size_', '');
         lotSizes[symbol] = value;
       } 
-      // Normale Settings (signal_threshold_percent wird nicht mehr hier gespeichert)
+      // Normale Settings
       else {
         botSettings[key] = value;
       }
     });
+
+    // Validierung: Prüfe ob alle erforderlichen Einstellungen vorhanden sind
+    const validation = validateBotSettings(botSettings);
+    if (!validation.valid) {
+      console.error('');
+      console.error('═══════════════════════════════════════════════');
+      console.error('❌ FEHLER: Bot-Einstellungen nicht vollständig!');
+      console.error('═══════════════════════════════════════════════');
+      console.error('Fehlende Einstellungen in bot_settings:');
+      validation.missing.forEach(key => {
+        console.error(`   - ${key}`);
+      });
+      console.error('');
+      console.error('💡 Bitte fügen Sie die fehlenden Einstellungen in Supabase hinzu!');
+      console.error('═══════════════════════════════════════════════');
+      console.error('');
+      return false;
+    }
 
     const newSettingsCount = Object.keys(botSettings).length;
     const newLotSizesCount = Object.keys(lotSizes).length;
@@ -905,23 +964,47 @@ async function loadStrategies() {
 
     // Validierung: Prüfe ob alle Strategien vollständig konfiguriert sind
     const requiredSettings = ['signal_threshold_percent', 'signal_cooldown_ms', 'trade_cooldown_ms'];
+    const requiredRisk = ['max_trade_size_usdt'];
     const invalidStrategies = [];
     
     strategies.forEach(strategy => {
-      const missingSettings = [];
+      const missing = [];
       const settings = strategy.config?.settings || {};
+      const risk = strategy.config?.risk || {};
+      const indicators = strategy.config?.indicators || {};
       
+      // Prüfe Settings
       requiredSettings.forEach(setting => {
         if (settings[setting] === undefined || settings[setting] === null) {
-          missingSettings.push(setting);
+          missing.push(`config.settings.${setting}`);
         }
       });
       
-      if (missingSettings.length > 0) {
+      // Prüfe Risk Management
+      requiredRisk.forEach(setting => {
+        if (risk[setting] === undefined || risk[setting] === null) {
+          missing.push(`config.risk.${setting}`);
+        }
+      });
+      
+      // Prüfe Indikatoren (mindestens MA Short und Long müssen vorhanden sein)
+      if (indicators.ma_short === undefined || indicators.ma_short === null) {
+        missing.push('config.indicators.ma_short');
+      }
+      if (indicators.ma_long === undefined || indicators.ma_long === null) {
+        missing.push('config.indicators.ma_long');
+      }
+      
+      // Prüfe ob Lot Size für Symbol vorhanden ist
+      if (!lotSizes[strategy.symbol]) {
+        missing.push(`lot_size_${strategy.symbol} (in bot_settings)`);
+      }
+      
+      if (missing.length > 0) {
         invalidStrategies.push({
           name: strategy.name,
           symbol: strategy.symbol,
-          missing: missingSettings
+          missing: missing
         });
       }
     });
@@ -938,19 +1021,31 @@ async function loadStrategies() {
         });
       });
       console.error('');
-      console.error('💡 Bitte fügen Sie die fehlenden Einstellungen zur Strategie-Config hinzu:');
-      console.error('   config.settings.signal_threshold_percent');
-      console.error('   config.settings.signal_cooldown_ms');
-      console.error('   config.settings.trade_cooldown_ms');
+      console.error('💡 Bitte fügen Sie die fehlenden Einstellungen hinzu:');
+      console.error('   - In strategies.config.settings: signal_threshold_percent, signal_cooldown_ms, trade_cooldown_ms');
+      console.error('   - In strategies.config.risk: max_trade_size_usdt');
+      console.error('   - In strategies.config.indicators: ma_short, ma_long');
+      console.error('   - In bot_settings: lot_size_SYMBOL für jedes verwendete Symbol');
       console.error('═══════════════════════════════════════════════');
       console.error('');
       
       // Entferne ungültige Strategien aus der Liste
       const validStrategies = strategies.filter(strategy => {
         const settings = strategy.config?.settings || {};
-        return requiredSettings.every(setting => 
+        const risk = strategy.config?.risk || {};
+        const indicators = strategy.config?.indicators || {};
+        
+        const hasAllSettings = requiredSettings.every(setting => 
           settings[setting] !== undefined && settings[setting] !== null
         );
+        const hasAllRisk = requiredRisk.every(setting => 
+          risk[setting] !== undefined && risk[setting] !== null
+        );
+        const hasIndicators = (indicators.ma_short !== undefined && indicators.ma_short !== null) &&
+                              (indicators.ma_long !== undefined && indicators.ma_long !== null);
+        const hasLotSize = !!lotSizes[strategy.symbol];
+        
+        return hasAllSettings && hasAllRisk && hasIndicators && hasLotSize;
       });
       
       if (validStrategies.length === 0) {
@@ -1167,11 +1262,32 @@ function calculateEMA(priceHistory, period) {
  */
 function generateSignal(currentPrice, strategy, priceHistory) {
   const config = strategy.config;
-  const maShortPeriod = config.indicators?.ma_short || 20;
-  const maLongPeriod = config.indicators?.ma_long || 50;
+  
+  // Indikator-Parameter aus Strategie oder Bot-Settings (OHNE Fallback)
+  const maShortPeriod = config.indicators?.ma_short ?? botSettings.default_indicators_ma_short;
+  const maLongPeriod = config.indicators?.ma_long ?? botSettings.default_indicators_ma_long;
+  
+  if (maShortPeriod === undefined || maShortPeriod === null) {
+    console.error(`❌ FEHLER: ma_short nicht konfiguriert (weder in Strategie noch in bot_settings)!`);
+    return {
+      action: 'error',
+      reason: `Konfigurationsfehler: ma_short fehlt`
+    };
+  }
+  
+  if (maLongPeriod === undefined || maLongPeriod === null) {
+    console.error(`❌ FEHLER: ma_long nicht konfiguriert (weder in Strategie noch in bot_settings)!`);
+    return {
+      action: 'error',
+      reason: `Konfigurationsfehler: ma_long fehlt`
+    };
+  }
 
   // Prüfen ob genug Daten vorhanden
-  const requiredData = Math.max(maLongPeriod, config.indicators?.rsi_period || 0, config.indicators?.macd_slow_period || 0);
+  const rsiPeriod = config.indicators?.rsi_period ?? botSettings.default_indicators_rsi_period ?? 0;
+  const macdSlowPeriod = config.indicators?.macd_slow_period ?? botSettings.default_indicators_macd_slow_period ?? 0;
+  const requiredData = Math.max(maLongPeriod, rsiPeriod, macdSlowPeriod);
+  
   if (!priceHistory || priceHistory.length < requiredData) {
     return {
       action: 'wait',
@@ -1210,27 +1326,44 @@ function generateSignal(currentPrice, strategy, priceHistory) {
   };
 
   // RSI berechnen (wenn aktiviert)
-  if (config.indicators?.rsi_period) {
-    indicators.rsi = calculateRSI(priceHistory, config.indicators.rsi_period || 14);
+  const rsiPeriodValue = config.indicators?.rsi_period ?? botSettings.default_indicators_rsi_period;
+  if (rsiPeriodValue !== undefined && rsiPeriodValue !== null) {
+    indicators.rsi = calculateRSI(priceHistory, rsiPeriodValue);
   }
 
   // MACD berechnen (wenn aktiviert)
-  if (config.indicators?.macd_fast_period) {
-    indicators.macd = calculateMACD(
-      priceHistory,
-      config.indicators.macd_fast_period || 12,
-      config.indicators.macd_slow_period || 26,
-      config.indicators.macd_signal_period || 9
-    );
+  const macdFastPeriod = config.indicators?.macd_fast_period ?? botSettings.default_indicators_macd_fast_period;
+  if (macdFastPeriod !== undefined && macdFastPeriod !== null) {
+    const macdSlowPeriodValue = config.indicators?.macd_slow_period ?? botSettings.default_indicators_macd_slow_period;
+    const macdSignalPeriod = config.indicators?.macd_signal_period ?? botSettings.default_indicators_macd_signal_period;
+    
+    if (macdSlowPeriodValue === undefined || macdSlowPeriodValue === null || 
+        macdSignalPeriod === undefined || macdSignalPeriod === null) {
+      console.error(`❌ FEHLER: MACD-Parameter nicht vollständig konfiguriert!`);
+    } else {
+      indicators.macd = calculateMACD(
+        priceHistory,
+        macdFastPeriod,
+        macdSlowPeriodValue,
+        macdSignalPeriod
+      );
+    }
   }
 
   // Bollinger Bands berechnen (wenn aktiviert)
-  if (config.indicators?.bollinger_period) {
-    indicators.bollinger = calculateBollingerBands(
-      priceHistory,
-      config.indicators.bollinger_period || 20,
-      config.indicators.bollinger_std_dev || 2
-    );
+  const bollingerPeriod = config.indicators?.bollinger_period ?? botSettings.default_indicators_bollinger_period;
+  if (bollingerPeriod !== undefined && bollingerPeriod !== null) {
+    const bollingerStdDev = config.indicators?.bollinger_std_dev ?? botSettings.default_indicators_bollinger_std_dev;
+    
+    if (bollingerStdDev === undefined || bollingerStdDev === null) {
+      console.error(`❌ FEHLER: Bollinger Bands Standard Deviation nicht konfiguriert!`);
+    } else {
+      indicators.bollinger = calculateBollingerBands(
+        priceHistory,
+        bollingerPeriod,
+        bollingerStdDev
+      );
+    }
   }
 
   // Signal-Confidence basierend auf Indikatoren berechnen
@@ -1239,18 +1372,23 @@ function generateSignal(currentPrice, strategy, priceHistory) {
 
   // RSI-Filter
   if (indicators.rsi !== null) {
-    const rsiOverbought = config.indicators?.rsi_overbought || 70;
-    const rsiOversold = config.indicators?.rsi_oversold || 30;
-
-    if (indicators.rsi > rsiOverbought) {
-      additionalReasons.push(`RSI überkauft (${indicators.rsi.toFixed(1)})`);
-      if (differencePercent > threshold) {
-        confidence *= 0.7; // Reduziere Confidence bei überkauftem Markt für BUY
-      }
-    } else if (indicators.rsi < rsiOversold) {
-      additionalReasons.push(`RSI überverkauft (${indicators.rsi.toFixed(1)})`);
-      if (differencePercent < -threshold) {
-        confidence *= 0.7; // Reduziere Confidence bei überverkauftem Markt für SELL
+    const rsiOverbought = config.indicators?.rsi_overbought ?? botSettings.default_indicators_rsi_overbought;
+    const rsiOversold = config.indicators?.rsi_oversold ?? botSettings.default_indicators_rsi_oversold;
+    
+    if (rsiOverbought === undefined || rsiOverbought === null || 
+        rsiOversold === undefined || rsiOversold === null) {
+      console.error(`❌ FEHLER: RSI Overbought/Oversold nicht konfiguriert!`);
+    } else {
+      if (indicators.rsi > rsiOverbought) {
+        additionalReasons.push(`RSI überkauft (${indicators.rsi.toFixed(1)})`);
+        if (differencePercent > threshold) {
+          confidence *= 0.7; // Reduziere Confidence bei überkauftem Markt für BUY
+        }
+      } else if (indicators.rsi < rsiOversold) {
+        additionalReasons.push(`RSI überverkauft (${indicators.rsi.toFixed(1)})`);
+        if (differencePercent < -threshold) {
+          confidence *= 0.7; // Reduziere Confidence bei überverkauftem Markt für SELL
+        }
       }
     }
   }
@@ -1382,8 +1520,15 @@ function analyzePrice(currentPrice, strategy) {
   // Preis zur Historie hinzufügen
   priceHistory.push(parseFloat(currentPrice));
 
-  // Historie begrenzen (aus Supabase oder Fallback 100)
-  const maxPriceHistory = botSettings.max_price_history || 100;
+  // Historie begrenzen (aus Supabase - MUSS vorhanden sein)
+  const maxPriceHistory = botSettings.max_price_history;
+  if (maxPriceHistory === undefined || maxPriceHistory === null) {
+    console.error(`❌ FEHLER: max_price_history nicht in bot_settings konfiguriert!`);
+    return {
+      action: 'error',
+      reason: 'Konfigurationsfehler: max_price_history fehlt'
+    };
+  }
   if (priceHistory.length > maxPriceHistory) {
     priceHistory.shift();
   }
@@ -1410,8 +1555,9 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
     }
 
     // Hole Stop-Loss und Take-Profit aus Strategie-Config
-    const stopLossPercent = strategy.config.risk?.stop_loss_percent || 0;
-    const takeProfitPercent = strategy.config.risk?.take_profit_percent || 0;
+    // Stop-Loss und Take-Profit sind optional (0 bedeutet deaktiviert)
+    const stopLossPercent = strategy.config.risk?.stop_loss_percent ?? 0;
+    const takeProfitPercent = strategy.config.risk?.take_profit_percent ?? 0;
 
     // Wenn beide deaktiviert sind, überspringe
     if (stopLossPercent === 0 && takeProfitPercent === 0) {
@@ -1586,21 +1732,24 @@ async function logBotEvent(level, message, data = {}) {
  * Berechnet die Kaufmenge basierend auf Risk Management & Binance Lot Size
  */
 function calculateQuantity(price, symbol, strategy) {
-  // Trade-Größe aus Strategie oder Bot-Settings oder Fallback
-  const maxTradeSize = strategy.config.risk?.max_trade_size_usdt 
-    || botSettings.default_trade_size_usdt 
-    || 100;
+  // Trade-Größe aus Strategie (MUSS vorhanden sein - wird bereits in loadStrategies validiert)
+  const maxTradeSize = strategy.config.risk?.max_trade_size_usdt;
+  
+  if (maxTradeSize === undefined || maxTradeSize === null) {
+    console.error(`❌ FEHLER: max_trade_size_usdt nicht in Strategie ${strategy.name} konfiguriert!`);
+    return null;
+  }
   
   // Berechne Basis-Menge
   let quantity = maxTradeSize / price;
   
-  // Hole Lot Size Regeln aus Supabase
+  // Hole Lot Size Regeln aus Supabase (MUSS vorhanden sein - wird bereits in loadStrategies validiert)
   const lotSize = lotSizes[symbol];
   
   if (!lotSize) {
-    console.error(`❌ Keine Lot Size Konfiguration für ${symbol} gefunden!`);
+    console.error(`❌ FEHLER: Keine Lot Size Konfiguration für ${symbol} gefunden!`);
     console.error(`💡 Bitte fügen Sie lot_size_${symbol} in bot_settings hinzu!`);
-    return null; // Trade abbrechen wenn keine Lot Size vorhanden
+    return null;
   }
   
   // Runde auf Step Size
@@ -1678,7 +1827,11 @@ async function canTrade(signal, strategy) {
 
   // NEU: Gesamt-Exposure prüfen
   const totalExposure = calculateTotalExposure();
-  const maxTotalExposure = botSettings.max_total_exposure_usdt || 1000;
+  const maxTotalExposure = botSettings.max_total_exposure_usdt;
+  if (maxTotalExposure === undefined || maxTotalExposure === null) {
+    console.error(`❌ FEHLER: max_total_exposure_usdt nicht in bot_settings konfiguriert!`);
+    return { allowed: false, reason: 'Konfigurationsfehler: max_total_exposure_usdt fehlt' };
+  }
   if (totalExposure >= maxTotalExposure) {
     const reason = `Max Total Exposure erreicht: ${totalExposure.toFixed(2)} USDT (Limit: ${maxTotalExposure} USDT)`;
     console.log(`⚠️  ${reason}`);
@@ -1686,9 +1839,11 @@ async function canTrade(signal, strategy) {
   }
 
   // Maximale gleichzeitige Trades prüfen
-  const maxConcurrentTrades = strategy.config.risk?.max_concurrent_trades 
-    || botSettings.max_concurrent_trades 
-    || 3;
+  const maxConcurrentTrades = strategy.config.risk?.max_concurrent_trades || botSettings.max_concurrent_trades;
+  if (maxConcurrentTrades === undefined || maxConcurrentTrades === null) {
+    console.error(`❌ FEHLER: max_concurrent_trades nicht konfiguriert (weder in Strategie noch in bot_settings)!`);
+    return { allowed: false, reason: 'Konfigurationsfehler: max_concurrent_trades fehlt' };
+  }
   if (openPositions.size >= maxConcurrentTrades) {
     const reason = `Maximum gleichzeitiger Trades erreicht (${maxConcurrentTrades})`;
     console.log(`⚠️  ${reason}`);
@@ -2168,8 +2323,9 @@ async function runBacktest(strategy, symbol, startDate, endDate, timeframe = '1h
       // Stop-Loss & Take-Profit prüfen (wenn Position offen)
       if (position) {
         const priceChangePercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
-        const stopLossPercent = strategy.config.risk?.stop_loss_percent || 0;
-        const takeProfitPercent = strategy.config.risk?.take_profit_percent || 0;
+        // Stop-Loss und Take-Profit sind optional (0 bedeutet deaktiviert)
+        const stopLossPercent = strategy.config.risk?.stop_loss_percent ?? 0;
+        const takeProfitPercent = strategy.config.risk?.take_profit_percent ?? 0;
 
         if (stopLossPercent > 0 && priceChangePercent <= -stopLossPercent) {
           // Stop-Loss ausgelöst
@@ -2220,7 +2376,11 @@ async function runBacktest(strategy, symbol, startDate, endDate, timeframe = '1h
 
       // Trade ausführen basierend auf Signal
       if (signal.action === 'buy' && !position) {
-        const tradeSize = strategy.config.risk?.max_trade_size_usdt || 100;
+        const tradeSize = strategy.config.risk?.max_trade_size_usdt;
+        if (tradeSize === undefined || tradeSize === null) {
+          console.error(`❌ FEHLER: max_trade_size_usdt nicht in Strategie ${strategy.name} konfiguriert!`);
+          continue; // Überspringe Backtest wenn Trade-Größe fehlt
+        }
         const quantity = tradeSize / currentPrice;
         
         position = {
@@ -2497,7 +2657,11 @@ async function createWebSocketConnection(symbol, strategies) {
       }
       
       // Preis anzeigen
-      const priceLogInterval = botSettings.logging_price_log_interval || 10;
+      const priceLogInterval = botSettings.logging_price_log_interval;
+      if (priceLogInterval === undefined || priceLogInterval === null) {
+        console.error(`❌ FEHLER: logging_price_log_interval nicht in bot_settings konfiguriert!`);
+        return; // Überspringe Logging wenn nicht konfiguriert
+      }
       if (currentHistoryLength % priceLogInterval === 0) {
         const priceDecimals = currentPrice < 1 ? 6 : 2;
         console.log(`💰 ${symbol}: ${currentPrice.toFixed(priceDecimals)} USDT | Vol: ${quantity.toFixed(2)}`);
@@ -2601,7 +2765,11 @@ async function createWebSocketConnection(symbol, strategies) {
         // Hold-Signal
         else if (signal.action === 'hold') {
           const showHold = botSettings.logging_show_hold_signals !== false;
-          const holdInterval = botSettings.logging_hold_log_interval || 50;
+          const holdInterval = botSettings.logging_hold_log_interval;
+          if (holdInterval === undefined || holdInterval === null) {
+            console.error(`❌ FEHLER: logging_hold_log_interval nicht in bot_settings konfiguriert!`);
+            continue; // Überspringe Hold-Logging wenn nicht konfiguriert
+          }
           if (showHold && currentHistoryLength % holdInterval === 0) {
             console.log(`📊 [${symbol}] Hold - MA${strategy.config.indicators.ma_short}: ${signal.maShort} | MA${strategy.config.indicators.ma_long}: ${signal.maLong} | Diff: ${signal.differencePercent}%`);
           }
