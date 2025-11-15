@@ -1,8 +1,8 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getBotStatus, getPositions, getTrades } from '@/lib/api';
-import type { BotStatus, Position, Trade } from '@/lib/types';
+import { getBotStatus, getPositions, getTrades, getStrategies } from '@/lib/api';
+import type { BotStatus, Position, Trade, Strategy } from '@/lib/types';
 import Link from 'next/link';
 import { format } from 'date-fns';
 
@@ -10,6 +10,7 @@ export default function Dashboard() {
   const [botStatus, setBotStatus] = useState<BotStatus | null>(null);
   const [positions, setPositions] = useState<Position[]>([]);
   const [recentTrades, setRecentTrades] = useState<Trade[]>([]);
+  const [activeStrategies, setActiveStrategies] = useState<Strategy[]>([]);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -20,14 +21,17 @@ export default function Dashboard() {
 
   const loadData = async () => {
     try {
-      const [status, pos, tradesResult] = await Promise.all([
+      const [status, pos, tradesResult, strategies] = await Promise.all([
         getBotStatus().catch(() => ({ status: 'stopped' as const, timestamp: new Date().toISOString() })),
         getPositions().catch(() => []),
         getTrades(10).catch(() => ({ trades: [], total: 0, limit: 10, offset: 0 })),
+        getStrategies().catch(() => []),
       ]);
       setBotStatus(status);
       setPositions(pos);
       setRecentTrades(tradesResult.trades);
+      // Filtere nur aktive Strategien
+      setActiveStrategies(strategies.filter(s => s.is_active));
     } catch (error) {
       console.error('Fehler beim Laden der Daten:', error);
     } finally {
@@ -79,6 +83,67 @@ export default function Dashboard() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* Aktive Strategien */}
+      <div className="mb-6">
+        <div className="flex justify-between items-center mb-4">
+          <h2 className="text-xl font-semibold text-gray-900">
+            Aktive Strategien ({activeStrategies.length})
+          </h2>
+          <Link
+            href="/strategies"
+            className="text-sm text-blue-600 hover:text-blue-800"
+          >
+            Alle anzeigen →
+          </Link>
+        </div>
+        {activeStrategies.length === 0 ? (
+          <div className="bg-white shadow rounded-lg p-6 text-center text-gray-500">
+            Keine aktiven Strategien
+          </div>
+        ) : (
+          <div className="bg-white shadow overflow-hidden sm:rounded-md">
+            <ul className="divide-y divide-gray-200">
+              {activeStrategies.map((strategy) => (
+                <li key={strategy.id} className="px-6 py-4">
+                  <div className="flex items-center justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center">
+                        <p className="text-sm font-medium text-gray-900">
+                          {strategy.name}
+                        </p>
+                        <span className="ml-2 inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium bg-blue-100 text-blue-800">
+                          {strategy.symbol}
+                        </span>
+                      </div>
+                      {strategy.description && (
+                        <p className="mt-1 text-sm text-gray-500">
+                          {strategy.description}
+                        </p>
+                      )}
+                      <div className="mt-2 flex gap-4 text-xs text-gray-500">
+                        <span>Trades: {strategy.total_trades || 0}</span>
+                        <span>Win Rate: {(strategy.win_rate || 0).toFixed(1)}%</span>
+                      </div>
+                    </div>
+                    <div className="ml-6 text-right">
+                      <p
+                        className={`text-sm font-medium ${
+                          (strategy.total_pnl || 0) >= 0 ? 'text-green-600' : 'text-red-600'
+                        }`}
+                      >
+                        {(strategy.total_pnl || 0) >= 0 ? '+' : ''}
+                        {(strategy.total_pnl || 0).toFixed(2)} USDT
+                      </p>
+                      <p className="text-xs text-gray-500 mt-1">Total PnL</p>
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
 
       {/* Offene Positionen */}
