@@ -85,19 +85,48 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
     console.log(`📊 Öffne/Erweitere Position: ${symbol} - ${quantity} @ ${price}`);
     
     // Hole Strategie-Config für Trailing Stop Einstellungen
-    const { data: strategy, error: strategyError } = await supabase
-      .from('strategies')
-      .select('config')
-      .eq('id', strategyId)
+    // WICHTIG: Lade aus coin_strategies (nicht nur strategies), da coin-spezifische Einstellungen dort gespeichert sind
+    const { data: coinStrategy, error: coinStrategyError } = await supabase
+      .from('coin_strategies')
+      .select(`
+        config,
+        strategies (
+          id,
+          config
+        )
+      `)
+      .eq('strategy_id', strategyId)
+      .eq('symbol', symbol.toUpperCase())
       .single();
     
-    if (strategyError) {
-      console.warn(`⚠️  Konnte Strategie-Config nicht laden: ${strategyError.message}`);
+    // Fallback: Wenn coin_strategies nicht gefunden wird, lade nur aus strategies
+    let mergedConfig = null;
+    if (coinStrategyError || !coinStrategy) {
+      console.warn(`⚠️  Konnte Coin-Strategie-Config nicht laden: ${coinStrategyError?.message || 'Nicht gefunden'}. Verwende Fallback zu strategies.`);
+      const { data: strategy, error: strategyError } = await supabase
+        .from('strategies')
+        .select('config')
+        .eq('id', strategyId)
+        .single();
+      
+      if (strategyError) {
+        console.warn(`⚠️  Konnte Strategie-Config nicht laden: ${strategyError.message}`);
+      }
+      mergedConfig = strategy?.config || {};
+    } else {
+      // Merge Configs: Basis (strategies) + Coin-spezifisch (coin_strategies)
+      const baseStrategy = coinStrategy?.strategies || {};
+      const coinConfig = coinStrategy?.config || {};
+      mergedConfig = {
+        ...baseStrategy.config, // Basis: type, timeframe, indicators
+        settings: coinConfig.settings || {}, // Coin-spezifisch: thresholds, cooldowns
+        risk: coinConfig.risk || {} // Coin-spezifisch: trade size, stop loss, trailing stop, etc.
+      };
     }
     
-    const useTrailingStop = strategy?.config?.risk?.use_trailing_stop === true;
-    const stopLossPercent = strategy?.config?.risk?.stop_loss_percent ?? 0;
-    const activationThreshold = strategy?.config?.risk?.trailing_stop_activation_threshold ?? 0;
+    const useTrailingStop = mergedConfig?.risk?.use_trailing_stop === true;
+    const stopLossPercent = mergedConfig?.risk?.stop_loss_percent ?? 0;
+    const activationThreshold = mergedConfig?.risk?.trailing_stop_activation_threshold ?? 0;
     
     // Prüfe ob bereits eine offene Position existiert
     const { data: existingPosition, error: fetchError } = await supabase
@@ -161,7 +190,9 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
     } else {
       // Neue Position erstellen
       const initialHighestPrice = price;
-      const initialTrailingStopPrice = useTrailingStop && stopLossPercent > 0
+      // Trailing Stop Price: Nur setzen wenn keine Aktivierungsschwelle gesetzt ist
+      // Wenn Aktivierungsschwelle > 0, wird der Trailing Stop erst aktiviert, wenn der Preis die Schwelle erreicht
+      const initialTrailingStopPrice = useTrailingStop && stopLossPercent > 0 && activationThreshold === 0
         ? initialHighestPrice * (1 - stopLossPercent / 100)
         : null;
       
@@ -179,7 +210,11 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
       
       // Füge Trailing Stop Felder hinzu wenn aktiv
       if (useTrailingStop) {
-        insertData.trailing_stop_price = initialTrailingStopPrice;
+        // trailing_stop_price wird nur gesetzt wenn keine Aktivierungsschwelle vorhanden ist
+        // Ansonsten wird es erst in checkStopLossTakeProfit gesetzt, wenn die Schwelle erreicht wird
+        if (initialTrailingStopPrice !== null) {
+          insertData.trailing_stop_price = initialTrailingStopPrice;
+        }
         insertData.use_trailing_stop = true;
         insertData.trailing_stop_activation_threshold = activationThreshold;
       }
@@ -2609,8 +2644,12 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
         // Update highest_price wenn currentPrice > highestPrice
         if (currentPrice > highestPrice) {
           highestPrice = currentPrice;
-          
-          // Berechne neuen Trailing Stop Preis
+        }
+        
+        // Initialisiere oder aktualisiere Trailing Stop Preis
+        // Wichtig: Wenn trailingStopPrice noch null ist (z.B. bei Aktivierungsschwelle), initialisiere es jetzt
+        // Oder wenn highestPrice aktualisiert wurde, aktualisiere auch trailingStopPrice
+        if (!trailingStopPrice || currentPrice > (position.highestPrice ?? position.entryPrice)) {
           trailingStopPrice = highestPrice * (1 - stopLossPercent / 100);
           
           // Update In-Memory Map
