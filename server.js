@@ -893,6 +893,163 @@ app.get('/api/testnet-balance', async (req, res) => {
 });
 
 /**
+ * Führt einen direkten Verkauf aus dem Wallet aus
+ */
+app.post('/api/sell', async (req, res) => {
+  try {
+    const { asset, quantity, symbol } = req.body;
+
+    if (!asset || !quantity || !symbol) {
+      return res.status(400).json({
+        success: false,
+        error: 'asset, quantity und symbol sind erforderlich'
+      });
+    }
+
+    if (!binanceClient) {
+      return res.status(400).json({
+        success: false,
+        error: 'Binance Client nicht verfügbar'
+      });
+    }
+
+    // Prüfe verfügbares Guthaben
+    const accountInfo = await binanceClient.accountInfo();
+    const balance = accountInfo.balances.find(b => b.asset === asset);
+    
+    if (!balance || parseFloat(balance.free) < parseFloat(quantity)) {
+      return res.status(400).json({
+        success: false,
+        error: `Nicht genügend ${asset} verfügbar. Verfügbar: ${balance ? parseFloat(balance.free) : 0}, Angefragt: ${quantity}`
+      });
+    }
+
+    // Hole Lot Size Regeln für das Symbol
+    const lotSize = lotSizes[symbol];
+    if (!lotSize) {
+      return res.status(400).json({
+        success: false,
+        error: `Keine Lot Size Konfiguration für ${symbol} gefunden`
+      });
+    }
+
+    // Runde Menge auf Step Size
+    let roundedQuantity = Math.floor(parseFloat(quantity) / lotSize.stepSize) * lotSize.stepSize;
+    roundedQuantity = parseFloat(roundedQuantity.toFixed(lotSize.decimals));
+
+    // Prüfe Min/Max
+    if (roundedQuantity < lotSize.minQty) {
+      return res.status(400).json({
+        success: false,
+        error: `Menge ${roundedQuantity} ist kleiner als Minimum ${lotSize.minQty}`
+      });
+    }
+    if (roundedQuantity > lotSize.maxQty) {
+      return res.status(400).json({
+        success: false,
+        error: `Menge ${roundedQuantity} ist größer als Maximum ${lotSize.maxQty}`
+      });
+    }
+
+    // Prüfe verfügbares Guthaben nochmal mit gerundeter Menge
+    if (parseFloat(balance.free) < roundedQuantity) {
+      return res.status(400).json({
+        success: false,
+        error: `Nicht genügend ${asset} verfügbar nach Rundung. Verfügbar: ${parseFloat(balance.free)}, Benötigt: ${roundedQuantity}`
+      });
+    }
+
+    console.log('');
+    console.log('═══════════════════════════════════════════════');
+    console.log(`🔄 FÜHRE MANUELLEN VERKAUF AUS`);
+    console.log('═══════════════════════════════════════════════');
+    console.log(`📊 Symbol: ${symbol}`);
+    console.log(`💰 Asset: ${asset}`);
+    console.log(`🔢 Menge: ${roundedQuantity}`);
+    console.log('═══════════════════════════════════════════════');
+
+    // Verkaufs-Order auf Binance Testnet platzieren
+    const order = await binanceClient.order({
+      symbol: symbol,
+      side: 'SELL',
+      type: 'MARKET',
+      quantity: roundedQuantity.toString()
+    });
+
+    // Durchschnittspreis berechnen
+    const avgPrice = order.fills && order.fills.length > 0
+      ? order.fills.reduce((sum, fill) => sum + parseFloat(fill.price), 0) / order.fills.length
+      : 0;
+
+    const executedQty = parseFloat(order.executedQty);
+    const total = avgPrice * executedQty;
+
+    console.log(`✅ Verkauf erfolgreich!`);
+    console.log(`   Order ID: ${order.orderId}`);
+    console.log(`   Status: ${order.status}`);
+    console.log(`   Ausgeführte Menge: ${executedQty}`);
+    console.log(`   Durchschnittspreis: ${avgPrice.toFixed(8)} USDT`);
+    console.log(`   Gesamtwert: ${total.toFixed(2)} USDT`);
+    console.log('═══════════════════════════════════════════════');
+    console.log('');
+
+    // Trade in Datenbank speichern (ohne strategy_id für manuelle Trades)
+    const { data: tradeData, error: dbError } = await supabase
+      .from('trades')
+      .insert({
+        strategy_id: null, // Manueller Trade
+        symbol: symbol,
+        side: 'sell',
+        price: avgPrice,
+        quantity: executedQty,
+        total: total,
+        order_id: order.orderId.toString(),
+        status: 'executed',
+        executed_at: new Date().toISOString(),
+        pnl: null, // Kein PnL für manuelle Trades ohne Entry-Preis
+        metadata: {
+          manual: true,
+          asset: asset,
+          order: {
+            orderId: order.orderId,
+            clientOrderId: order.clientOrderId,
+            transactTime: order.transactTime,
+            fills: order.fills
+          },
+          testnet: true
+        }
+      })
+      .select();
+
+    if (dbError) {
+      console.error('⚠️  Fehler beim Speichern in Datenbank:', dbError);
+      // Trade war erfolgreich, auch wenn DB-Speicherung fehlschlug
+    }
+
+    res.json({
+      success: true,
+      order: {
+        orderId: order.orderId,
+        symbol: symbol,
+        side: 'SELL',
+        quantity: executedQty,
+        price: avgPrice,
+        total: total,
+        status: order.status
+      },
+      trade: tradeData ? tradeData[0] : null
+    });
+
+  } catch (error) {
+    console.error('❌ Fehler beim Verkauf:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Unbekannter Fehler beim Verkauf'
+    });
+  }
+});
+
+/**
  * Gibt Performance-Metriken zurück
  */
 app.get('/api/performance', async (req, res) => {

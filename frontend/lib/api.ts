@@ -267,3 +267,30 @@ export const getTestnetBalance = async (): Promise<TestnetBalance> => {
   }
 };
 
+/**
+ * Führt einen direkten Verkauf aus dem Wallet aus
+ * @param asset Das zu verkaufende Asset (z.B. 'BTC', 'DOGE')
+ * @param quantity Die zu verkaufende Menge
+ * @param symbol Das Trading-Paar (z.B. 'BTCUSDT', 'DOGEUSDT')
+ */
+export const sellAsset = async (
+  asset: string,
+  quantity: number,
+  symbol: string
+): Promise<{ success: boolean; order?: any; trade?: Trade; error?: string }> => {
+  try {
+    const response = await api.post('/api/sell', {
+      asset,
+      quantity,
+      symbol
+    });
+    return response.data;
+  } catch (error: any) {
+    console.error('Fehler beim Verkauf:', error);
+    return {
+      success: false,
+      error: error.response?.data?.error || error.message || 'Unbekannter Fehler beim Verkauf'
+    };
+  }
+};
+
