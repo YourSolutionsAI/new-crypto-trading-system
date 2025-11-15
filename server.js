@@ -61,7 +61,8 @@ let activeStrategies = [];
 let priceHistories = new Map(); // Map<symbol, number[]> - Separate Preis-Historien pro Symbol
 let lastSignalTimes = new Map(); // Map<symbol, number> - Signal-Cooldown pro Symbol
 let lastTradeTime = 0; // Globaler Trade-Cooldown (bleibt global)
-let tradesInProgress = new Map(); // Map<symbol, boolean> - Trade-Lock pro Symbol (verhindert Doppelausführungen)
+let tradesInProgress = new Map(); // Map<symbol, Promise> - Trade-Lock pro Symbol (verhindert Doppelausführungen)
+let tradeQueues = new Map(); // Map<symbol, Promise> - Queue für Trades pro Symbol (verhindert Race Conditions)
 let openPositions = new Map(); // Tracking offener Positionen (bereits symbol-spezifisch: ${strategy.id}_${symbol})
 let botSettings = {}; // Bot-Einstellungen aus Supabase
 let lotSizes = {}; // Lot Size Regeln aus Supabase
@@ -2244,12 +2245,8 @@ async function canTrade(signal, strategy) {
     return { allowed: false, reason: reason };
   }
 
-  // NEU: Prüfe ob Trade für dieses Symbol bereits läuft (verhindert Doppelausführungen)
-  if (tradesInProgress.get(symbol)) {
-    const reason = `Trade für ${symbol} läuft bereits - Warte auf Abschluss`;
-    console.log(`🔒 ${reason}`);
-    return { allowed: false, reason: reason };
-  }
+  // Prüfung ob Trade läuft wird jetzt durch die Promise-basierte Queue in executeTrade() gehandhabt
+  // Diese Prüfung ist nicht mehr notwendig, da die Queue sicherstellt, dass nur ein Trade gleichzeitig läuft
 
   // Bei BUY: Prüfen ob bereits eine offene Position existiert
   if (signal.action === 'buy') {
@@ -2313,25 +2310,37 @@ async function canTrade(signal, strategy) {
 async function executeTrade(signal, strategy) {
   const symbol = strategy.symbol; // WICHTIG: Symbol aus Strategie, nicht global!
   
-  // KRITISCH: Lock prüfen BEVOR irgendwelche Checks gemacht werden (pro Symbol)
-  // Dies verhindert, dass mehrere Trades für dasselbe Symbol gleichzeitig ausgeführt werden
-  if (tradesInProgress.get(symbol)) {
-    console.log(`🔒 Trade-Ausführung für ${symbol} läuft bereits - Signal wird ignoriert: ${signal.action.toUpperCase()}`);
-    return null;
+  // KRITISCH: Promise-basierte Queue pro Symbol - verhindert Race Conditions
+  // Warte auf vorherige Trades für dieses Symbol
+  const previousTrade = tradeQueues.get(symbol);
+  if (previousTrade) {
+    try {
+      await previousTrade;
+    } catch (error) {
+      // Ignoriere Fehler von vorherigen Trades
+    }
   }
 
+  // Erstelle neues Promise für diesen Trade
+  let resolveTrade;
+  const tradePromise = new Promise((resolve) => {
+    resolveTrade = resolve;
+  });
+  tradeQueues.set(symbol, tradePromise);
+  
   try {
-    // Trading-Checks ZUERST durchführen
+    // Trading-Checks durchführen
     const tradeCheck = await canTrade(signal, strategy);
     if (!tradeCheck.allowed) {
+      // Trade-Queue auflösen und freigeben
+      resolveTrade();
+      tradeQueues.delete(symbol);
       // Logge warum Trade nicht ausgeführt wird
       console.log(`⚠️  Trade nicht ausgeführt: ${tradeCheck.reason}`);
       return null;
     }
 
-    // KRITISCH: Lock UND Cooldown SOFORT setzen, NACHDEM alle Checks bestanden wurden
-    // Dies verhindert, dass mehrere Signale gleichzeitig die Checks bestehen
-    tradesInProgress.set(symbol, true); // Lock pro Symbol
+    // Cooldown setzen
     lastTradeTime = Date.now(); // Globaler Cooldown bleibt
 
     console.log('');
@@ -2480,14 +2489,18 @@ async function executeTrade(signal, strategy) {
     // Trade in Datenbank speichern
     await saveTradeToDatabase(order, signal, strategy);
 
-    // Cooldown wurde bereits oben gesetzt - hier nur Lock freigeben (pro Symbol)
-    tradesInProgress.set(symbol, false);
+    // Trade-Queue auflösen und freigeben
+    resolveTrade();
+    tradeQueues.delete(symbol);
 
     return order;
 
   } catch (error) {
-    // WICHTIG: Lock IMMER freigeben, auch bei Fehlern! (pro Symbol)
-    tradesInProgress.set(symbol, false);
+    // WICHTIG: Trade-Queue IMMER auflösen und freigeben, auch bei Fehlern! (pro Symbol)
+    if (resolveTrade) {
+      resolveTrade();
+    }
+    tradeQueues.delete(symbol);
     console.error('');
     console.error('═══════════════════════════════════════════════');
     console.error('❌ ORDER FEHLGESCHLAGEN');
@@ -3294,6 +3307,7 @@ function stopTradingBot() {
   priceHistories.clear();
   lastSignalTimes.clear();
   tradesInProgress.clear();
+  tradeQueues.clear();
   activeStrategies = [];
   lastTradeTime = 0;
   
