@@ -20,14 +20,14 @@ export default function Dashboard() {
 
   const loadData = async () => {
     try {
-      const [status, pos, trades] = await Promise.all([
+      const [status, pos, tradesResult] = await Promise.all([
         getBotStatus().catch(() => ({ status: 'stopped' as const, timestamp: new Date().toISOString() })),
         getPositions().catch(() => []),
-        getTrades(10).catch(() => []),
+        getTrades(10).catch(() => ({ trades: [], total: 0, limit: 10, offset: 0 })),
       ]);
       setBotStatus(status);
       setPositions(pos);
-      setRecentTrades(trades);
+      setRecentTrades(tradesResult.trades);
     } catch (error) {
       console.error('Fehler beim Laden der Daten:', error);
     } finally {

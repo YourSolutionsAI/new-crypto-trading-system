@@ -75,14 +75,14 @@ export const stopBot = async () => {
 };
 
 // Trades
-export const getTrades = async (limit = 50, offset = 0): Promise<Trade[]> => {
+export const getTrades = async (limit = 50, offset = 0): Promise<{ trades: Trade[]; total: number; limit: number; offset: number }> => {
   try {
     const response = await api.get('/api/trades', {
       params: { limit, offset },
     });
     const trades = response.data.trades || [];
     // Sicherstellen, dass alle Werte definiert sind
-    return trades.map((trade: any) => ({
+    const normalizedTrades = trades.map((trade: any) => ({
       id: trade.id || '',
       strategy_id: trade.strategy_id || '',
       symbol: trade.symbol || '',
@@ -97,9 +97,43 @@ export const getTrades = async (limit = 50, offset = 0): Promise<Trade[]> => {
       order_id: trade.order_id,
       metadata: trade.metadata,
     }));
+    return {
+      trades: normalizedTrades,
+      total: response.data.total || 0,
+      limit: response.data.limit || limit,
+      offset: response.data.offset || offset
+    };
   } catch (error) {
     console.error('Fehler beim Laden der Trades:', error);
-    return [];
+    return { trades: [], total: 0, limit, offset };
+  }
+};
+
+// Trade-Statistiken
+export interface TradeStats {
+  by_strategy: Array<{
+    strategy_id: string;
+    strategy_name: string;
+    buys: number;
+    sells: number;
+    total_pnl: number;
+  }>;
+  by_coin: Array<{
+    symbol: string;
+    buys: number;
+    sells: number;
+    total_pnl: number;
+  }>;
+}
+
+// Lädt Trade-Statistiken (Käufe/Verkäufe pro Strategie und Coin, Performance)
+export const getTradeStats = async (): Promise<TradeStats> => {
+  try {
+    const response = await api.get('/api/trades/stats');
+    return response.data;
+  } catch (error) {
+    console.error('Fehler beim Laden der Trade-Statistiken:', error);
+    return { by_strategy: [], by_coin: [] };
   }
 };
 

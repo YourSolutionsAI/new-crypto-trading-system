@@ -308,24 +308,119 @@ app.get('/api/trades', async (req, res) => {
   try {
     const { limit = 50, offset = 0 } = req.query;
 
+    // Gesamtzahl der Trades für Pagination
+    const { count: totalCount, error: countError } = await supabase
+      .from('trades')
+      .select('*', { count: 'exact', head: true });
+
+    if (countError) throw countError;
+
+    // Trades mit Pagination laden
     const { data: trades, error } = await supabase
       .from('trades')
       .select('*')
       .order('created_at', { ascending: false })
-      .limit(parseInt(limit))
       .range(parseInt(offset), parseInt(offset) + parseInt(limit) - 1);
 
     if (error) throw error;
 
     res.json({ 
       success: true, 
-      trades: trades || []
+      trades: trades || [],
+      total: totalCount || 0,
+      limit: parseInt(limit),
+      offset: parseInt(offset)
     });
   } catch (error) {
     console.error('Fehler beim Laden der Trades:', error);
     res.status(500).json({
       success: false,
       message: 'Fehler beim Laden der Trades',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Gibt Trade-Statistiken zurück (Käufe/Verkäufe pro Strategie und Coin, Performance)
+ */
+app.get('/api/trades/stats', async (req, res) => {
+  try {
+    // Lade alle Trades für Statistiken
+    const { data: allTrades, error: tradesError } = await supabase
+      .from('trades')
+      .select('*')
+      .order('created_at', { ascending: false });
+
+    if (tradesError) throw tradesError;
+
+    // Lade alle Strategien für Namen-Mapping
+    const { data: strategies, error: strategiesError } = await supabase
+      .from('strategies')
+      .select('id, name');
+
+    if (strategiesError) throw strategiesError;
+
+    // Erstelle Strategie-ID zu Name Mapping
+    const strategyMap = new Map();
+    (strategies || []).forEach(s => strategyMap.set(s.id, s.name));
+
+    // Statistiken pro Strategie
+    const statsByStrategy = new Map();
+    // Statistiken pro Coin
+    const statsByCoin = new Map();
+
+    (allTrades || []).forEach(trade => {
+      const strategyName = strategyMap.get(trade.strategy_id) || 'Unbekannt';
+      const isBuy = trade.side.toLowerCase() === 'buy';
+      const pnl = trade.pnl || 0;
+
+      // Statistiken pro Strategie
+      if (!statsByStrategy.has(trade.strategy_id)) {
+        statsByStrategy.set(trade.strategy_id, {
+          strategy_id: trade.strategy_id,
+          strategy_name: strategyName,
+          buys: 0,
+          sells: 0,
+          total_pnl: 0
+        });
+      }
+      const strategyStats = statsByStrategy.get(trade.strategy_id);
+      if (isBuy) {
+        strategyStats.buys++;
+      } else {
+        strategyStats.sells++;
+      }
+      strategyStats.total_pnl += pnl;
+
+      // Statistiken pro Coin
+      if (!statsByCoin.has(trade.symbol)) {
+        statsByCoin.set(trade.symbol, {
+          symbol: trade.symbol,
+          buys: 0,
+          sells: 0,
+          total_pnl: 0
+        });
+      }
+      const coinStats = statsByCoin.get(trade.symbol);
+      if (isBuy) {
+        coinStats.buys++;
+      } else {
+        coinStats.sells++;
+      }
+      coinStats.total_pnl += pnl;
+    });
+
+    res.json({
+      success: true,
+      by_strategy: Array.from(statsByStrategy.values()),
+      by_coin: Array.from(statsByCoin.values())
+    });
+  } catch (error) {
+    console.error('Fehler beim Laden der Trade-Statistiken:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Laden der Trade-Statistiken',
       error: error.message
     });
   }
@@ -399,31 +494,31 @@ app.get('/api/positions', async (req, res) => {
       const openBuyTrades = [];
       let sellIndex = 0;
       
-      for (const buyTrade of buyTrades) {
-        let remainingQuantity = parseFloat(buyTrade.quantity);
-        
-        // Versuche, diese BUY-Position mit SELL-Trades zu schließen
-        while (remainingQuantity > 0.00000001 && sellTrades && sellIndex < sellTrades.length) {
-          const sellTrade = sellTrades[sellIndex];
-          const sellQuantity = parseFloat(sellTrade.quantity);
+        for (const buyTrade of buyTrades) {
+          let remainingQuantity = parseFloat(buyTrade.quantity);
           
-          if (sellQuantity >= remainingQuantity) {
-            // Dieser SELL schließt die gesamte BUY-Position
-            remainingQuantity = 0;
-            sellIndex++;
-          } else {
-            // Dieser SELL schließt nur einen Teil der BUY-Position
-            remainingQuantity -= sellQuantity;
-            sellIndex++;
+          // Versuche, diese BUY-Position mit SELL-Trades zu schließen
+        while (remainingQuantity > 0.00000001 && sellTrades && sellIndex < sellTrades.length) {
+            const sellTrade = sellTrades[sellIndex];
+            const sellQuantity = parseFloat(sellTrade.quantity);
+            
+            if (sellQuantity >= remainingQuantity) {
+              // Dieser SELL schließt die gesamte BUY-Position
+              remainingQuantity = 0;
+              sellIndex++;
+            } else {
+              // Dieser SELL schließt nur einen Teil der BUY-Position
+              remainingQuantity -= sellQuantity;
+              sellIndex++;
+            }
           }
-        }
-        
+          
         // Wenn noch etwas übrig ist (mit Toleranz für Rundungsfehler), ist die Position offen
         if (remainingQuantity > 0.00000001) {
-          openBuyTrades.push({
-            ...buyTrade,
-            remainingQuantity: remainingQuantity
-          });
+            openBuyTrades.push({
+              ...buyTrade,
+              remainingQuantity: remainingQuantity
+            });
         }
       }
       
@@ -482,7 +577,7 @@ app.get('/api/positions', async (req, res) => {
     }
 
     console.log(`📊 Insgesamt ${allPositions.length} offene Positionen gefunden`);
-    
+
     res.json({ 
       success: true, 
       positions: allPositions 
