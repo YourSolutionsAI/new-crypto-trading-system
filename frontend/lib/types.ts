@@ -30,16 +30,41 @@ export interface Position {
   pnlPercent: number;
 }
 
+// Basis-Strategie (OHNE Coin-Zuordnung, nur Indikatoren)
 export interface Strategy {
   id: string;
   name: string;
   description?: string;
-  symbol: string;
-  is_active: boolean;
   config: {
-    ma_short?: number;
-    ma_long?: number;
-    trade_size_usdt?: number;
+    type?: string;
+    timeframe?: string;
+    indicators?: {
+      ma_short?: number;
+      ma_long?: number;
+      rsi_period?: number;
+      rsi_overbought?: number;
+      rsi_oversold?: number;
+      macd_fast_period?: number;
+      macd_slow_period?: number;
+      macd_signal_period?: number;
+      bollinger_period?: number;
+      bollinger_std_dev?: number;
+    };
+  };
+  created_at: string;
+  updated_at: string;
+}
+
+// Coin-Strategie (Coin mit zugewiesener Strategie + Coin-spezifische Einstellungen)
+export interface CoinStrategy {
+  symbol: string;
+  strategy_id: string | null;
+  strategy_name?: string;
+  strategy_description?: string;
+  active: boolean;
+  config: {
+    type?: string;
+    timeframe?: string;
     indicators?: {
       ma_short?: number;
       ma_long?: number;
@@ -66,10 +91,6 @@ export interface Strategy {
       trailing_stop_activation_threshold?: number;
     };
   };
-  total_trades?: number;
-  profitable_trades?: number;
-  total_pnl?: number;
-  win_rate?: number;
   created_at: string;
   updated_at: string;
 }

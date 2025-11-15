@@ -472,59 +472,34 @@ app.get('/api/strategy-performance', async (req, res) => {
 });
 
 /**
- * Gibt alle Strategien zurück
+ * Gibt alle Basis-Strategien zurück (OHNE Coin-Zuordnung)
+ * NEU: Strategien enthalten nur Basis-Konfiguration (Indikatoren, Typ)
  */
 app.get('/api/strategies', async (req, res) => {
   try {
     const { data: strategies, error } = await supabase
       .from('strategies')
       .select('*')
-      .order('symbol', { ascending: true });
+      .order('name', { ascending: true });
 
     if (error) throw error;
 
-    // Erweitere Strategien mit Performance-Daten und normalisiere Config
-    const strategiesWithPerf = await Promise.all(strategies.map(async (strategy) => {
-      const { data: trades } = await supabase
-        .from('trades')
-        .select('*')
-        .eq('strategy_id', strategy.id);
-      
-      const totalTrades = trades?.length || 0;
-      const profitableTrades = trades?.filter(t => t.pnl && t.pnl > 0).length || 0;
-      const totalPnl = trades?.reduce((sum, t) => sum + (t.pnl || 0), 0) || 0;
-      const winRate = totalTrades > 0 ? (profitableTrades / totalTrades) * 100 : 0;
-
-      // Normalisiere Config für Frontend: Extrahiere indicators und risk
+    // Normalisiere Config für Frontend: Nur Basis-Konfiguration
+    const normalizedStrategies = strategies.map((strategy) => {
       const config = strategy.config || {};
-      const normalizedConfig = {
-        ...config,
-        // MA Short/Long aus indicators extrahieren
-        ma_short: config.indicators?.ma_short,
-        ma_long: config.indicators?.ma_long,
-        // Trade Size aus risk extrahieren
-        trade_size_usdt: config.risk?.max_trade_size_usdt,
-        // Settings und Risk bleiben wie sie sind
-        settings: config.settings,
-        risk: config.risk,
-        // Indicators auch behalten für Vollständigkeit
-        indicators: config.indicators
-      };
-
       return {
         ...strategy,
-        is_active: strategy.active, // Map "active" aus DB zu "is_active" für Frontend
-        total_trades: totalTrades,
-        profitable_trades: profitableTrades,
-        total_pnl: totalPnl,
-        win_rate: winRate,
-        config: normalizedConfig
+        config: {
+          type: config.type,
+          timeframe: config.timeframe,
+          indicators: config.indicators || {}
+        }
       };
-    }));
+    });
 
     res.json({ 
       success: true, 
-      strategies: strategiesWithPerf 
+      strategies: normalizedStrategies 
     });
   } catch (error) {
     console.error('Fehler beim Laden der Strategien:', error);
@@ -537,7 +512,8 @@ app.get('/api/strategies', async (req, res) => {
 });
 
 /**
- * Aktualisiert eine Strategie
+ * Aktualisiert eine Basis-Strategie (nur Indikatoren, Typ, Zeitrahmen)
+ * NEU: Coin-spezifische Einstellungen werden NICHT hier geändert!
  */
 app.put('/api/strategies/:id', async (req, res) => {
   try {
@@ -548,24 +524,19 @@ app.put('/api/strategies/:id', async (req, res) => {
     if (updates.config) {
       const config = updates.config;
       const normalizedConfig = {
-        ...config,
+        type: config.type,
+        timeframe: config.timeframe,
         // MA Short/Long zurück in indicators verschieben
         indicators: {
           ...config.indicators,
           ma_short: config.ma_short ?? config.indicators?.ma_short,
           ma_long: config.ma_long ?? config.indicators?.ma_long
-        },
-        // Trade Size zurück in risk verschieben
-        risk: {
-          ...config.risk,
-          max_trade_size_usdt: config.trade_size_usdt ?? config.risk?.max_trade_size_usdt
         }
       };
       
       // Entferne die normalisierten Felder aus dem Root-Level
       delete normalizedConfig.ma_short;
       delete normalizedConfig.ma_long;
-      delete normalizedConfig.trade_size_usdt;
       
       updates = {
         ...updates,
@@ -597,17 +568,164 @@ app.put('/api/strategies/:id', async (req, res) => {
 });
 
 /**
- * Toggle Strategie aktiv/inaktiv
+ * NEU: Coin-Strategien Endpunkte
  */
-app.patch('/api/strategies/:id/toggle', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { is_active } = req.body; // Frontend sendet is_active
 
-    const { data: strategy, error } = await supabase
-      .from('strategies')
-      .update({ active: is_active }) // Aber DB-Spalte heißt "active"
-      .eq('id', id)
+/**
+ * Gibt alle Coins mit ihren zugewiesenen Strategien zurück
+ */
+app.get('/api/coins', async (req, res) => {
+  try {
+    const { data: coinStrategies, error } = await supabase
+      .from('coin_strategies')
+      .select(`
+        *,
+        strategies (
+          id,
+          name,
+          description,
+          config
+        )
+      `)
+      .order('symbol', { ascending: true });
+
+    if (error) throw error;
+
+    // Kombiniere Daten für Frontend
+    const coins = coinStrategies.map(cs => {
+      const baseStrategy = cs.strategies || {};
+      const coinConfig = cs.config || {};
+      
+      // Merge Configs
+      const mergedConfig = {
+        ...baseStrategy.config,
+        settings: coinConfig.settings || {},
+        risk: coinConfig.risk || {}
+      };
+
+      return {
+        symbol: cs.symbol,
+        strategy_id: cs.strategy_id,
+        strategy_name: baseStrategy.name,
+        strategy_description: baseStrategy.description,
+        active: cs.active,
+        config: mergedConfig,
+        created_at: cs.created_at,
+        updated_at: cs.updated_at
+      };
+    });
+
+    res.json({ 
+      success: true, 
+      coins 
+    });
+  } catch (error) {
+    console.error('Fehler beim Laden der Coins:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Laden der Coins',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Erstellt oder aktualisiert eine Coin-Strategie-Zuordnung
+ */
+app.put('/api/coins/:symbol', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const { strategy_id, active, config } = req.body;
+
+    // Validiere dass Strategie existiert
+    if (strategy_id) {
+      const { data: strategy, error: strategyError } = await supabase
+        .from('strategies')
+        .select('id')
+        .eq('id', strategy_id)
+        .single();
+
+      if (strategyError || !strategy) {
+        return res.status(400).json({
+          success: false,
+          message: 'Strategie nicht gefunden'
+        });
+      }
+    }
+
+    // Upsert coin_strategies
+    const updateData = {
+      symbol: symbol.toUpperCase(),
+      strategy_id: strategy_id || null,
+      active: active !== undefined ? active : false,
+      updated_at: new Date().toISOString()
+    };
+
+    // Wenn config übergeben wird, speichere nur Coin-spezifische Einstellungen
+    if (config) {
+      updateData.config = {
+        settings: config.settings || {},
+        risk: config.risk || {}
+      };
+    }
+
+    const { data: coinStrategy, error } = await supabase
+      .from('coin_strategies')
+      .upsert(updateData, { onConflict: 'symbol' })
+      .select(`
+        *,
+        strategies (
+          id,
+          name,
+          description,
+          config
+        )
+      `)
+      .single();
+
+    if (error) throw error;
+
+    // Kombiniere für Response
+    const baseStrategy = coinStrategy.strategies || {};
+    const coinConfig = coinStrategy.config || {};
+    const mergedConfig = {
+      ...baseStrategy.config,
+      settings: coinConfig.settings || {},
+      risk: coinConfig.risk || {}
+    };
+
+    res.json({ 
+      success: true, 
+      coin: {
+        symbol: coinStrategy.symbol,
+        strategy_id: coinStrategy.strategy_id,
+        strategy_name: baseStrategy.name,
+        active: coinStrategy.active,
+        config: mergedConfig
+      }
+    });
+  } catch (error) {
+    console.error('Fehler beim Aktualisieren der Coin-Strategie:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Aktualisieren der Coin-Strategie',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Toggle Coin aktiv/inaktiv
+ */
+app.patch('/api/coins/:symbol/toggle', async (req, res) => {
+  try {
+    const { symbol } = req.params;
+    const { active } = req.body;
+
+    const { data: coinStrategy, error } = await supabase
+      .from('coin_strategies')
+      .update({ active: active })
+      .eq('symbol', symbol.toUpperCase())
       .select()
       .single();
 
@@ -615,7 +733,7 @@ app.patch('/api/strategies/:id/toggle', async (req, res) => {
 
     res.json({ 
       success: true, 
-      strategy 
+      coin: coinStrategy 
     });
   } catch (error) {
     console.error('Fehler beim Toggle der Strategie:', error);
@@ -1347,26 +1465,63 @@ async function loadBotSettings(silent = false) {
 
 /**
  * Lädt aktive Trading-Strategien von Supabase
+ * NEU: Lädt coin_strategies mit JOIN zu strategies
+ * - Symbol kommt aus coin_strategies
+ * - Basis-Konfiguration (Indikatoren) kommt aus strategies
+ * - Coin-spezifische Einstellungen (Settings, Risk) kommen aus coin_strategies
  */
 async function loadStrategies() {
   try {
-    console.log('📊 Lade Trading-Strategien von Supabase...');
+    console.log('📊 Lade aktive Coin-Strategien von Supabase...');
     
-    const { data: strategies, error } = await supabase
-      .from('strategies')
-      .select('*')
+    // Lade coin_strategies mit JOIN zu strategies
+    const { data: coinStrategies, error } = await supabase
+      .from('coin_strategies')
+      .select(`
+        *,
+        strategies (
+          id,
+          name,
+          description,
+          config
+        )
+      `)
       .eq('active', true);
 
     if (error) {
-      console.error('❌ Fehler beim Laden der Strategien:', error);
+      console.error('❌ Fehler beim Laden der Coin-Strategien:', error);
       return [];
     }
 
-    if (!strategies || strategies.length === 0) {
-      console.log('⚠️  Keine aktiven Strategien gefunden');
-      console.log('💡 Tipp: Aktivieren Sie eine Strategie in Supabase (Table Editor → strategies → active = true)');
+    if (!coinStrategies || coinStrategies.length === 0) {
+      console.log('⚠️  Keine aktiven Coin-Strategien gefunden');
+      console.log('💡 Tipp: Aktivieren Sie einen Coin in Supabase (Table Editor → coin_strategies → active = true)');
       return [];
     }
+
+    // Kombiniere Daten: Basis-Strategie + Coin-spezifische Einstellungen
+    const strategies = coinStrategies
+      .filter(cs => cs.strategies) // Nur wenn Strategie existiert
+      .map(cs => {
+        const baseStrategy = cs.strategies;
+        const coinConfig = cs.config || {};
+        
+        // Merge Configs: Basis (strategies) + Coin-spezifisch (coin_strategies)
+        const mergedConfig = {
+          ...baseStrategy.config, // Basis: type, timeframe, indicators
+          settings: coinConfig.settings || {}, // Coin-spezifisch: thresholds, cooldowns
+          risk: coinConfig.risk || {} // Coin-spezifisch: trade size, stop loss, etc.
+        };
+        
+        return {
+          id: baseStrategy.id,
+          name: baseStrategy.name,
+          description: baseStrategy.description,
+          symbol: cs.symbol, // Symbol kommt aus coin_strategies!
+          active: cs.active,
+          config: mergedConfig
+        };
+      });
 
     // Validierung: Prüfe ob alle Strategien vollständig konfiguriert sind
     const requiredSettings = ['signal_threshold_percent', 'signal_cooldown_ms', 'trade_cooldown_ms'];
@@ -1418,7 +1573,7 @@ async function loadStrategies() {
     if (invalidStrategies.length > 0) {
       console.error('');
       console.error('═══════════════════════════════════════════════');
-      console.error('❌ FEHLER: Strategien nicht vollständig konfiguriert!');
+      console.error('❌ FEHLER: Coin-Strategien nicht vollständig konfiguriert!');
       console.error('═══════════════════════════════════════════════');
       invalidStrategies.forEach(strategy => {
         console.error(`   ❌ ${strategy.name} (${strategy.symbol}):`);
@@ -1428,8 +1583,8 @@ async function loadStrategies() {
       });
       console.error('');
       console.error('💡 Bitte fügen Sie die fehlenden Einstellungen hinzu:');
-      console.error('   - In strategies.config.settings: signal_threshold_percent, signal_cooldown_ms, trade_cooldown_ms');
-      console.error('   - In strategies.config.risk: max_trade_size_usdt');
+      console.error('   - In coin_strategies.config.settings: signal_threshold_percent, signal_cooldown_ms, trade_cooldown_ms');
+      console.error('   - In coin_strategies.config.risk: max_trade_size_usdt');
       console.error('   - In strategies.config.indicators: ma_short, ma_long');
       console.error('   - In bot_settings: lot_size_SYMBOL für jedes verwendete Symbol');
       console.error('═══════════════════════════════════════════════');
@@ -1455,15 +1610,15 @@ async function loadStrategies() {
       });
       
       if (validStrategies.length === 0) {
-        console.error('❌ Keine gültigen Strategien gefunden - Bot kann nicht starten!');
+        console.error('❌ Keine gültigen Coin-Strategien gefunden - Bot kann nicht starten!');
         return [];
       }
       
-      console.log(`⚠️  Nur ${validStrategies.length} von ${strategies.length} Strategie(n) sind gültig`);
-      strategies = validStrategies;
+      console.log(`⚠️  Nur ${validStrategies.length} von ${strategies.length} Coin-Strategie(n) sind gültig`);
+      return validStrategies;
     }
 
-    console.log(`✅ ${strategies.length} aktive Strategie(n) geladen:`);
+    console.log(`✅ ${strategies.length} aktive Coin-Strategie(n) geladen:`);
     strategies.forEach(s => {
       const settings = s.config?.settings || {};
       console.log(`   📈 ${s.name} (${s.symbol})`);

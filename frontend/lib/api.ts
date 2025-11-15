@@ -1,7 +1,7 @@
 // API Client für Backend-Integration
 
 import axios from 'axios';
-import type { BotStatus, Trade, Position, Strategy, TestnetBalance } from './types';
+import type { BotStatus, Trade, Position, Strategy, CoinStrategy, TestnetBalance } from './types';
 
 const API_URL = 
   typeof window !== 'undefined' 
@@ -156,52 +156,19 @@ export const getPositions = async (): Promise<Position[]> => {
   }
 };
 
-// Strategies
+// Strategies (Basis-Strategien OHNE Coin-Zuordnung)
 export const getStrategies = async (): Promise<Strategy[]> => {
   try {
     const response = await api.get('/api/strategies');
-    console.log('📊 API Response:', response.data);
     const strategies = response.data.strategies || [];
-    console.log('📊 Strategien geladen:', strategies.length);
-    
-    // Sicherstellen, dass alle Werte definiert sind
-    const normalizedStrategies = strategies.map((strategy: any) => {
-      // Normalisiere is_active: PostgreSQL gibt 'active' zurück, aber wir brauchen 'is_active'
-      const isActive = strategy.is_active !== undefined 
-        ? strategy.is_active 
-        : (strategy.active !== undefined ? strategy.active : false);
-      
-      console.log(`📊 Strategie ${strategy.name}: active=${strategy.active}, is_active=${strategy.is_active}, normalized=${isActive}`);
-      
-      return {
-        ...strategy,
-        is_active: isActive, // Sicherstellen, dass is_active gesetzt ist
-        win_rate: strategy.win_rate ?? 0,
-        total_pnl: strategy.total_pnl ?? 0,
-        total_trades: strategy.total_trades ?? 0,
-        profitable_trades: strategy.profitable_trades ?? 0,
-        config: {
-          ...strategy.config,
-          // Die API gibt jetzt bereits normalisierte Werte zurück
-          ma_short: strategy.config?.ma_short ?? strategy.config?.indicators?.ma_short,
-          ma_long: strategy.config?.ma_long ?? strategy.config?.indicators?.ma_long,
-          trade_size_usdt: strategy.config?.trade_size_usdt ?? strategy.config?.risk?.max_trade_size_usdt,
-          settings: strategy.config?.settings ? {
-            signal_threshold_percent: strategy.config.settings.signal_threshold_percent ?? undefined,
-            signal_cooldown_ms: strategy.config.settings.signal_cooldown_ms ?? undefined,
-            trade_cooldown_ms: strategy.config.settings.trade_cooldown_ms ?? undefined,
-          } : undefined,
-          risk: strategy.config?.risk ? {
-            max_trade_size_usdt: strategy.config.risk.max_trade_size_usdt ?? undefined,
-            stop_loss_percent: strategy.config.risk.stop_loss_percent ?? undefined,
-            take_profit_percent: strategy.config.risk.take_profit_percent ?? undefined,
-          } : undefined,
-        },
-      };
-    });
-    
-    console.log('📊 Normalisierte Strategien:', normalizedStrategies);
-    return normalizedStrategies;
+    return strategies.map((strategy: any) => ({
+      ...strategy,
+      config: {
+        type: strategy.config?.type,
+        timeframe: strategy.config?.timeframe,
+        indicators: strategy.config?.indicators || {}
+      }
+    }));
   } catch (error) {
     console.error('Fehler beim Laden der Strategien:', error);
     return [];
@@ -216,14 +183,38 @@ export const updateStrategy = async (
   return response.data.strategy;
 };
 
-export const toggleStrategy = async (
-  id: string,
-  isActive: boolean
-): Promise<Strategy> => {
-  const response = await api.patch(`/api/strategies/${id}/toggle`, {
-    is_active: isActive,
-  });
-  return response.data.strategy;
+// Coin-Strategien (Coins mit zugewiesenen Strategien)
+export const getCoins = async (): Promise<CoinStrategy[]> => {
+  try {
+    const response = await api.get('/api/coins');
+    return response.data.coins || [];
+  } catch (error) {
+    console.error('Fehler beim Laden der Coins:', error);
+    return [];
+  }
+};
+
+export const updateCoinStrategy = async (
+  symbol: string,
+  updates: {
+    strategy_id?: string | null;
+    active?: boolean;
+    config?: {
+      settings?: Partial<CoinStrategy['config']['settings']>;
+      risk?: Partial<CoinStrategy['config']['risk']>;
+    };
+  }
+): Promise<CoinStrategy> => {
+  const response = await api.put(`/api/coins/${symbol}`, updates);
+  return response.data.coin;
+};
+
+export const toggleCoin = async (
+  symbol: string,
+  active: boolean
+): Promise<CoinStrategy> => {
+  const response = await api.patch(`/api/coins/${symbol}/toggle`, { active });
+  return response.data.coin;
 };
 
 // Bot Settings
