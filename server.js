@@ -435,7 +435,258 @@ function extractBaseAsset(symbol) {
   return symbol.slice(0, -4);
 }
 
-// Synchronisations-Funktionen wurden entfernt - nur noch DB-Werte werden verwendet
+/**
+ * Prüft das tatsächliche Guthaben bei Binance und synchronisiert Positionen
+ * STATE-OF-THE-ART: Automatische Position-Synchronisation mit Binance
+ * @param {string} strategyId - Strategy ID
+ * @param {string} symbol - Trading Symbol (z.B. DOGEUSDT)
+ * @returns {Object} Ergebnis der Synchronisation
+ */
+async function syncPositionWithBinance(strategyId, symbol) {
+  try {
+    console.log(`🔄 Synchronisiere Position mit Binance: ${symbol}`);
+    
+    // Extrahiere Base-Asset aus Symbol
+    const baseAsset = extractBaseAsset(symbol);
+    
+    if (!baseAsset) {
+      console.warn(`⚠️  Konnte Base-Asset nicht aus Symbol extrahieren: ${symbol}`);
+      return { synced: false, reason: 'Konnte Base-Asset nicht extrahieren' };
+    }
+    
+    if (!binanceClient) {
+      console.warn(`⚠️  Binance Client nicht verfügbar für Synchronisation`);
+      return { synced: false, reason: 'Binance Client nicht verfügbar' };
+    }
+    
+    // Hole tatsächliches Guthaben von Binance
+    let accountInfo;
+    try {
+      accountInfo = await binanceClient.accountInfo();
+    } catch (error) {
+      console.error(`❌ Fehler beim Abrufen der Binance Account Info: ${error.message}`);
+      return { synced: false, reason: `Binance API Fehler: ${error.message}` };
+    }
+    
+    const balance = accountInfo.balances.find(b => b.asset === baseAsset);
+    const actualBalance = balance ? parseFloat(balance.free) + parseFloat(balance.locked) : 0;
+    
+    console.log(`📊 Binance Guthaben für ${baseAsset}: ${actualBalance} (Free: ${balance ? parseFloat(balance.free) : 0}, Locked: ${balance ? parseFloat(balance.locked) : 0})`);
+    
+    // Hole Position aus Datenbank
+    const { data: position, error: posError } = await supabase
+      .from('positions')
+      .select('*')
+      .eq('strategy_id', strategyId)
+      .eq('symbol', symbol)
+      .eq('status', 'open')
+      .single();
+    
+    if (posError || !position) {
+      // Keine Position in DB gefunden - alles OK
+      console.log(`✅ Keine offene Position in DB für ${symbol} - Synchron`);
+      return { synced: true, action: 'none', reason: 'Keine Position in DB' };
+    }
+    
+    const dbQuantity = parseFloat(position.quantity);
+    
+    // Hole Lot Size Info für minimale handelbare Menge
+    let minTradeableQuantity = 0.0001; // Fallback
+    try {
+      const lotSize = lotSizes[symbol];
+      if (lotSize && lotSize.minQty) {
+        minTradeableQuantity = parseFloat(lotSize.minQty) * 2; // 2x Minimum als Sicherheitspuffer
+      }
+    } catch (error) {
+      console.warn(`⚠️  Konnte Lot Size nicht laden für ${symbol}`);
+    }
+    
+    // Prüfe ob Position geschlossen werden muss
+    if (actualBalance < minTradeableQuantity) {
+      // Guthaben bei Binance ist sehr klein oder 0 - Position schließen
+      console.log(`🔒 Guthaben bei Binance zu klein (${actualBalance} < ${minTradeableQuantity}) - Schließe Position`);
+      
+      const { error: updateError } = await supabase
+        .from('positions')
+        .update({
+          quantity: 0,
+          status: 'closed',
+          closed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', position.id);
+      
+      if (updateError) {
+        console.error(`❌ Fehler beim Schließen der Position: ${updateError.message}`);
+        return { synced: false, reason: updateError.message };
+      }
+      
+      // Entferne aus In-Memory Map
+      const positionKey = `${strategyId}_${symbol}`;
+      if (openPositions.has(positionKey)) {
+        openPositions.delete(positionKey);
+      }
+      
+      await logBotEvent('info', `Position automatisch geschlossen: Guthaben bei Binance zu klein`, {
+        symbol: symbol,
+        baseAsset: baseAsset,
+        binanceBalance: actualBalance,
+        dbQuantity: dbQuantity,
+        minTradeableQuantity: minTradeableQuantity,
+        strategy_id: strategyId
+      });
+      
+      return { 
+        synced: true, 
+        action: 'closed', 
+        reason: `Guthaben bei Binance zu klein: ${actualBalance} < ${minTradeableQuantity}`,
+        binanceBalance: actualBalance,
+        dbQuantity: dbQuantity
+      };
+    }
+    
+    // Prüfe ob DB-Quantity deutlich größer ist als tatsächliches Guthaben
+    const difference = dbQuantity - actualBalance;
+    const tolerance = Math.max(minTradeableQuantity, dbQuantity * 0.01); // 1% Toleranz oder Minimum
+    
+    if (difference > tolerance) {
+      // DB zeigt mehr als tatsächlich vorhanden - aktualisiere DB
+      console.log(`📊 DB-Quantity (${dbQuantity}) > Binance Balance (${actualBalance}) - Aktualisiere Position`);
+      
+      if (actualBalance < minTradeableQuantity) {
+        // Schließe Position wenn Balance zu klein
+        const { error: updateError } = await supabase
+          .from('positions')
+          .update({
+            quantity: 0,
+            status: 'closed',
+            closed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', position.id);
+        
+        if (!updateError) {
+          const positionKey = `${strategyId}_${symbol}`;
+          if (openPositions.has(positionKey)) {
+            openPositions.delete(positionKey);
+          }
+        }
+        
+        return { 
+          synced: true, 
+          action: 'closed', 
+          reason: `Position geschlossen: DB hatte ${dbQuantity}, Binance hat ${actualBalance}`,
+          binanceBalance: actualBalance,
+          dbQuantity: dbQuantity
+        };
+      } else {
+        // Aktualisiere Quantity auf tatsächliches Guthaben
+        const { error: updateError } = await supabase
+          .from('positions')
+          .update({
+            quantity: actualBalance,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', position.id);
+        
+        if (!updateError) {
+          const positionKey = `${strategyId}_${symbol}`;
+          if (openPositions.has(positionKey)) {
+            openPositions.get(positionKey).quantity = actualBalance;
+          }
+        }
+        
+        return { 
+          synced: true, 
+          action: 'updated', 
+          reason: `Position aktualisiert: ${dbQuantity} -> ${actualBalance}`,
+          binanceBalance: actualBalance,
+          dbQuantity: dbQuantity
+        };
+      }
+    }
+    
+    // Prüfe auch ob Binance mehr hat als DB (könnte bedeuten dass außerhalb des Systems gekauft wurde)
+    if (actualBalance > dbQuantity + tolerance) {
+      console.log(`📊 Binance Balance (${actualBalance}) > DB-Quantity (${dbQuantity}) - Aktualisiere Position`);
+      
+      const { error: updateError } = await supabase
+        .from('positions')
+        .update({
+          quantity: actualBalance,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', position.id);
+      
+      if (!updateError) {
+        const positionKey = `${strategyId}_${symbol}`;
+        if (openPositions.has(positionKey)) {
+          openPositions.get(positionKey).quantity = actualBalance;
+        }
+      }
+      
+      return { 
+        synced: true, 
+        action: 'updated', 
+        reason: `Position aktualisiert: ${dbQuantity} -> ${actualBalance} (mehr bei Binance)`,
+        binanceBalance: actualBalance,
+        dbQuantity: dbQuantity
+      };
+    }
+    
+    // Position ist synchron
+    console.log(`✅ Position synchron: DB=${dbQuantity}, Binance=${actualBalance}`);
+    return { 
+      synced: true, 
+      action: 'none', 
+      reason: 'Position synchron',
+      binanceBalance: actualBalance,
+      dbQuantity: dbQuantity
+    };
+    
+  } catch (error) {
+    console.error(`❌ Fehler bei Position-Synchronisation für ${symbol}:`, error);
+    return { synced: false, reason: error.message };
+  }
+}
+
+/**
+ * Synchronisiert alle offenen Positionen mit Binance
+ * STATE-OF-THE-ART: Periodische Synchronisation aller Positionen
+ */
+async function syncAllPositionsWithBinance() {
+  try {
+    console.log('🔄 Synchronisiere alle Positionen mit Binance...');
+    
+    const { data: positions, error } = await supabase
+      .from('positions')
+      .select('strategy_id, symbol')
+      .eq('status', 'open')
+      .gt('quantity', 0);
+    
+    if (error) {
+      console.error('❌ Fehler beim Laden der Positionen:', error);
+      return;
+    }
+    
+    if (!positions || positions.length === 0) {
+      console.log('✅ Keine offenen Positionen zum Synchronisieren');
+      return;
+    }
+    
+    console.log(`📊 Synchronisiere ${positions.length} Position(en)...`);
+    
+    for (const position of positions) {
+      await syncPositionWithBinance(position.strategy_id, position.symbol);
+      // Kleine Pause zwischen Prüfungen um Rate Limits zu vermeiden
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+    
+    console.log('✅ Synchronisation abgeschlossen');
+  } catch (error) {
+    console.error('❌ Fehler bei der Synchronisation aller Positionen:', error);
+  }
+}
 
 // API-Routen
 
@@ -2816,6 +3067,15 @@ async function canTrade(signal, strategy) {
     }
     
     if (existingPosition && existingPosition.quantity > 0) {
+      // STATE-OF-THE-ART: Prüfe auch bei Binance ob Position wirklich noch existiert
+      const syncResult = await syncPositionWithBinance(strategy.id, symbol);
+      
+      if (syncResult.synced && syncResult.action === 'closed') {
+        // Position wurde geschlossen - erlaube neuen Kauf
+        console.log(`✅ Position wurde geschlossen - erlaube neuen Kauf`);
+        return { allowed: true, reason: 'Position wurde geschlossen' };
+      }
+      
       const quantity = parseFloat(existingPosition.quantity);
       const minTradeableQuantity = 0.0001;
       
@@ -3207,22 +3467,33 @@ async function executeTrade(signal, strategy) {
     console.error('═══════════════════════════════════════════════');
     console.error('');
 
-    // Bei "insufficient balance" Fehler logge den Fehler
+    // STATE-OF-THE-ART: Bei "insufficient balance" Fehler prüfe Binance-Guthaben
     const isInsufficientBalance = error.code === -2010 || 
                                    error.message?.toLowerCase().includes('insufficient balance');
     
     if (isInsufficientBalance && signal.action === 'sell') {
-      console.log('⚠️ "Insufficient Balance" Fehler erkannt - verwende DB-Werte');
-      await logBotEvent('warning', `Insufficient Balance Fehler beim Verkauf`, {
-        symbol: symbol,
-        strategy_id: strategy.id,
-        error_code: error.code,
-        error_message: error.message
-      });
+      console.log('🔍 "Insufficient Balance" Fehler erkannt - Prüfe Binance-Guthaben...');
       
-      // Fehler in Datenbank loggen
-      await logTradeError(error, signal, strategy);
-      return null;
+      // Synchronisiere Position mit Binance
+      const syncResult = await syncPositionWithBinance(strategy.id, symbol);
+      
+      if (syncResult.synced && syncResult.action === 'closed') {
+        console.log(`✅ Position automatisch geschlossen: ${syncResult.reason}`);
+        await logBotEvent('info', `Position geschlossen nach insufficient balance Fehler`, {
+          symbol: symbol,
+          reason: syncResult.reason,
+          binanceBalance: syncResult.binanceBalance,
+          dbQuantity: syncResult.dbQuantity,
+          strategy_id: strategy.id,
+          error_code: error.code,
+          error_message: error.message
+        });
+        
+        // Position wurde geschlossen - kein Grund zur Wiederherstellung
+        // Fehler in Datenbank loggen
+        await logTradeError(error, signal, strategy);
+        return null;
+      }
     }
 
     // WICHTIG: Bei SELL-Fehler Position wiederherstellen (nur wenn nicht geschlossen wurde)
@@ -4179,6 +4450,25 @@ app.listen(PORT, HOST, () => {
     }, 5 * 60 * 1000);
   }, 60000); // Starte nach 1 Minute
   
-  // Periodische Synchronisation wurde entfernt - nur noch DB-Werte werden verwendet
+  // STATE-OF-THE-ART: Periodische Position-Synchronisation mit Binance
+  // Starte nach 2 Minuten (damit Bot initialisiert ist) und dann alle 10 Minuten
+  setTimeout(() => {
+    console.log('🔄 Starte periodische Position-Synchronisation mit Binance (alle 10 Minuten)...');
+    
+    // Erste Synchronisation nach 2 Minuten
+    setTimeout(async () => {
+      if (botStatus === 'läuft') {
+        console.log('🔄 Erste Position-Synchronisation beim Start...');
+        await syncAllPositionsWithBinance();
+      }
+    }, 2 * 60 * 1000);
+    
+    // Periodische Synchronisation alle 10 Minuten
+    setInterval(async () => {
+      if (botStatus === 'läuft') {
+        await syncAllPositionsWithBinance();
+      }
+    }, 10 * 60 * 1000); // Alle 10 Minuten
+  }, 60000); // Starte nach 1 Minute
 });
 
