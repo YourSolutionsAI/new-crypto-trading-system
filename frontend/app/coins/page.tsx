@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { getCoins, getStrategies, updateCoinStrategy, toggleCoin } from '@/lib/api';
 import type { CoinStrategy, Strategy } from '@/lib/types';
+import { formatNumber, parseFormattedNumber, formatNumberInput } from '@/lib/numberFormat';
 
 // Verfügbare Coins (können später aus API geladen werden)
 const AVAILABLE_COINS = [
@@ -194,16 +195,17 @@ export default function CoinsPage() {
                                 Signal Threshold (%)
                               </label>
                               <input
-                                type="number"
-                                step="0.001"
-                                value={editForm.signal_threshold_percent || ''}
-                                onChange={(e) =>
+                                type="text"
+                                value={editForm.signal_threshold_percent !== undefined ? formatNumber(editForm.signal_threshold_percent, 3) : ''}
+                                onChange={(e) => {
+                                  const parsed = parseFormattedNumber(e.target.value);
                                   setEditForm({
                                     ...editForm,
-                                    signal_threshold_percent: parseFloat(e.target.value) || undefined,
-                                  })
-                                }
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                                    signal_threshold_percent: parsed,
+                                  });
+                                }}
+                                placeholder="0,000"
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                               />
                             </div>
                             <div>
@@ -211,15 +213,17 @@ export default function CoinsPage() {
                                 Signal Cooldown (ms)
                               </label>
                               <input
-                                type="number"
-                                value={editForm.signal_cooldown_ms || ''}
-                                onChange={(e) =>
+                                type="text"
+                                value={editForm.signal_cooldown_ms !== undefined ? formatNumber(editForm.signal_cooldown_ms, 0) : ''}
+                                onChange={(e) => {
+                                  const parsed = parseFormattedNumber(e.target.value);
                                   setEditForm({
                                     ...editForm,
-                                    signal_cooldown_ms: parseInt(e.target.value) || undefined,
-                                  })
-                                }
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                                    signal_cooldown_ms: parsed ? Math.floor(parsed) : undefined,
+                                  });
+                                }}
+                                placeholder="0"
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                               />
                             </div>
                             <div>
@@ -227,15 +231,17 @@ export default function CoinsPage() {
                                 Trade Cooldown (ms)
                               </label>
                               <input
-                                type="number"
-                                value={editForm.trade_cooldown_ms || ''}
-                                onChange={(e) =>
+                                type="text"
+                                value={editForm.trade_cooldown_ms !== undefined ? formatNumber(editForm.trade_cooldown_ms, 0) : ''}
+                                onChange={(e) => {
+                                  const parsed = parseFormattedNumber(e.target.value);
                                   setEditForm({
                                     ...editForm,
-                                    trade_cooldown_ms: parseInt(e.target.value) || undefined,
-                                  })
-                                }
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                                    trade_cooldown_ms: parsed ? Math.floor(parsed) : undefined,
+                                  });
+                                }}
+                                placeholder="0"
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                               />
                               <p className="mt-1 text-xs text-gray-500">Pause zwischen Trades für diesen Coin (pro Coin individuell)</p>
                             </div>
@@ -253,16 +259,17 @@ export default function CoinsPage() {
                                 Trade Size (USDT)
                               </label>
                               <input
-                                type="number"
-                                step="0.01"
-                                value={editForm.max_trade_size_usdt || ''}
-                                onChange={(e) =>
+                                type="text"
+                                value={editForm.max_trade_size_usdt !== undefined ? formatNumber(editForm.max_trade_size_usdt, 2) : ''}
+                                onChange={(e) => {
+                                  const parsed = parseFormattedNumber(e.target.value);
                                   setEditForm({
                                     ...editForm,
-                                    max_trade_size_usdt: parseFloat(e.target.value) || undefined,
-                                  })
-                                }
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                                    max_trade_size_usdt: parsed,
+                                  });
+                                }}
+                                placeholder="0,00"
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                               />
                             </div>
                             <div>
@@ -270,16 +277,17 @@ export default function CoinsPage() {
                                 Stop-Loss (%)
                               </label>
                               <input
-                                type="number"
-                                step="0.1"
-                                value={editForm.stop_loss_percent || ''}
-                                onChange={(e) =>
+                                type="text"
+                                value={editForm.stop_loss_percent !== undefined ? formatNumber(editForm.stop_loss_percent, 1) : ''}
+                                onChange={(e) => {
+                                  const parsed = parseFormattedNumber(e.target.value);
                                   setEditForm({
                                     ...editForm,
-                                    stop_loss_percent: parseFloat(e.target.value) || undefined,
-                                  })
-                                }
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                                    stop_loss_percent: parsed,
+                                  });
+                                }}
+                                placeholder="0,0"
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                               />
                             </div>
                             <div>
@@ -287,16 +295,17 @@ export default function CoinsPage() {
                                 Take-Profit (%)
                               </label>
                               <input
-                                type="number"
-                                step="0.1"
-                                value={editForm.take_profit_percent || ''}
-                                onChange={(e) =>
+                                type="text"
+                                value={editForm.take_profit_percent !== undefined ? formatNumber(editForm.take_profit_percent, 1) : ''}
+                                onChange={(e) => {
+                                  const parsed = parseFormattedNumber(e.target.value);
                                   setEditForm({
                                     ...editForm,
-                                    take_profit_percent: parseFloat(e.target.value) || undefined,
-                                  })
-                                }
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                                    take_profit_percent: parsed,
+                                  });
+                                }}
+                                placeholder="0,0"
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                               />
                             </div>
                           </div>
@@ -332,18 +341,17 @@ export default function CoinsPage() {
                                   Aktivierungs-Schwelle (%)
                                 </label>
                                 <input
-                                  type="number"
-                                  step="0.1"
-                                  min="0"
-                                  value={editForm.trailing_stop_activation_threshold || ''}
-                                  onChange={(e) =>
+                                  type="text"
+                                  value={editForm.trailing_stop_activation_threshold !== undefined ? formatNumber(editForm.trailing_stop_activation_threshold, 1) : ''}
+                                  onChange={(e) => {
+                                    const parsed = parseFormattedNumber(e.target.value);
                                     setEditForm({
                                       ...editForm,
-                                      trailing_stop_activation_threshold: parseFloat(e.target.value) || 0,
-                                    })
-                                  }
-                                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                                  placeholder="0"
+                                      trailing_stop_activation_threshold: parsed || 0,
+                                    });
+                                  }}
+                                  placeholder="0,0"
+                                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                                 />
                               </div>
                             )}
@@ -377,19 +385,25 @@ export default function CoinsPage() {
                           <div>
                             <span className="text-gray-500">Trade Size:</span>
                             <span className="ml-2 font-medium text-gray-900">
-                              {coin?.config?.risk?.max_trade_size_usdt ?? '-'} USDT
+                              {coin?.config?.risk?.max_trade_size_usdt !== undefined 
+                                ? formatNumber(coin.config.risk.max_trade_size_usdt, 2) 
+                                : '-'} USDT
                             </span>
                           </div>
                           <div>
                             <span className="text-gray-500">Signal Threshold:</span>
                             <span className="ml-2 font-medium text-gray-900">
-                              {coin?.config?.settings?.signal_threshold_percent ?? '-'}%
+                              {coin?.config?.settings?.signal_threshold_percent !== undefined 
+                                ? formatNumber(coin.config.settings.signal_threshold_percent, 3) 
+                                : '-'}%
                             </span>
                           </div>
                           <div>
                             <span className="text-gray-500">Stop-Loss:</span>
                             <span className="ml-2 font-medium text-gray-900">
-                              {coin?.config?.risk?.stop_loss_percent ?? '-'}%
+                              {coin?.config?.risk?.stop_loss_percent !== undefined 
+                                ? formatNumber(coin.config.risk.stop_loss_percent, 1) 
+                                : '-'}%
                               {coin?.config?.risk?.use_trailing_stop && (
                                 <span className="ml-1 text-xs text-blue-600">(Trailing)</span>
                               )}

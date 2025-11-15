@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { getStrategies, updateStrategy } from '@/lib/api';
 import type { Strategy } from '@/lib/types';
+import { formatNumber, parseFormattedNumber } from '@/lib/numberFormat';
 
 export default function StrategiesPage() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
@@ -101,15 +102,17 @@ export default function StrategiesPage() {
                             MA Short
                           </label>
                           <input
-                            type="number"
-                            value={editForm.ma_short || ''}
-                            onChange={(e) =>
+                            type="text"
+                            value={editForm.ma_short !== undefined ? formatNumber(editForm.ma_short, 0) : ''}
+                            onChange={(e) => {
+                              const parsed = parseFormattedNumber(e.target.value);
                               setEditForm({
                                 ...editForm,
-                                ma_short: parseInt(e.target.value),
-                              })
-                            }
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                                ma_short: parsed ? Math.floor(parsed) : undefined,
+                              });
+                            }}
+                            placeholder="0"
+                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                           />
                         </div>
                         <div>
@@ -117,15 +120,17 @@ export default function StrategiesPage() {
                             MA Long
                           </label>
                           <input
-                            type="number"
-                            value={editForm.ma_long || ''}
-                            onChange={(e) =>
+                            type="text"
+                            value={editForm.ma_long !== undefined ? formatNumber(editForm.ma_long, 0) : ''}
+                            onChange={(e) => {
+                              const parsed = parseFormattedNumber(e.target.value);
                               setEditForm({
                                 ...editForm,
-                                ma_long: parseInt(e.target.value),
-                              })
-                            }
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                                ma_long: parsed ? Math.floor(parsed) : undefined,
+                              });
+                            }}
+                            placeholder="0"
+                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                           />
                         </div>
                       </div>
@@ -150,13 +155,17 @@ export default function StrategiesPage() {
                         <div>
                           <span className="text-gray-500">MA Short:</span>
                           <span className="ml-2 font-medium text-gray-900">
-                            {strategy.config?.indicators?.ma_short ?? '-'}
+                            {strategy.config?.indicators?.ma_short !== undefined 
+                              ? formatNumber(strategy.config.indicators.ma_short, 0) 
+                              : '-'}
                           </span>
                         </div>
                         <div>
                           <span className="text-gray-500">MA Long:</span>
                           <span className="ml-2 font-medium text-gray-900">
-                            {strategy.config?.indicators?.ma_long ?? '-'}
+                            {strategy.config?.indicators?.ma_long !== undefined 
+                              ? formatNumber(strategy.config.indicators.ma_long, 0) 
+                              : '-'}
                           </span>
                         </div>
                         <div>

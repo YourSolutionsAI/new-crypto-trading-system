@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { getBotSettings, updateBotSettings } from '@/lib/api';
 import type { BotSettings } from '@/lib/api';
+import { formatNumber, parseFormattedNumber } from '@/lib/numberFormat';
 
 export default function SettingsPage() {
   const [settings, setSettings] = useState<BotSettings>({});
@@ -85,11 +86,14 @@ export default function SettingsPage() {
                     Max Total Exposure (USDT)
                   </label>
                   <input
-                    type="number"
-                    step="0.01"
-                    value={getSettingValue('max_total_exposure_usdt')}
-                    onChange={(e) => updateSetting('max_total_exposure_usdt', parseFloat(e.target.value) || 0)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    type="text"
+                    value={getSettingValue('max_total_exposure_usdt') ? formatNumber(getSettingValue('max_total_exposure_usdt'), 2) : ''}
+                    onChange={(e) => {
+                      const parsed = parseFormattedNumber(e.target.value);
+                      updateSetting('max_total_exposure_usdt', parsed || 0);
+                    }}
+                    placeholder="0,00"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">Maximales Gesamt-Exposure über alle Positionen</p>
                 </div>
@@ -98,10 +102,14 @@ export default function SettingsPage() {
                     Max Concurrent Trades
                   </label>
                   <input
-                    type="number"
-                    value={getSettingValue('max_concurrent_trades')}
-                    onChange={(e) => updateSetting('max_concurrent_trades', parseInt(e.target.value) || 0)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    type="text"
+                    value={getSettingValue('max_concurrent_trades') ? formatNumber(getSettingValue('max_concurrent_trades'), 0) : ''}
+                    onChange={(e) => {
+                      const parsed = parseFormattedNumber(e.target.value);
+                      updateSetting('max_concurrent_trades', parsed ? Math.floor(parsed) : 0);
+                    }}
+                    placeholder="0"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">Maximale Anzahl gleichzeitiger Trades</p>
                 </div>
@@ -110,11 +118,14 @@ export default function SettingsPage() {
                     Default Trade Size (USDT)
                   </label>
                   <input
-                    type="number"
-                    step="0.01"
-                    value={getSettingValue('default_trade_size_usdt')}
-                    onChange={(e) => updateSetting('default_trade_size_usdt', parseFloat(e.target.value) || 0)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    type="text"
+                    value={getSettingValue('default_trade_size_usdt') ? formatNumber(getSettingValue('default_trade_size_usdt'), 2) : ''}
+                    onChange={(e) => {
+                      const parsed = parseFormattedNumber(e.target.value);
+                      updateSetting('default_trade_size_usdt', parsed || 0);
+                    }}
+                    placeholder="0,00"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">Standard Trade-Größe wenn nicht in Strategie definiert</p>
                 </div>
@@ -123,11 +134,14 @@ export default function SettingsPage() {
                     Signal Threshold (%)
                   </label>
                   <input
-                    type="number"
-                    step="0.001"
-                    value={getSettingValue('signal_threshold_percent')}
-                    onChange={(e) => updateSetting('signal_threshold_percent', parseFloat(e.target.value) || 0)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    type="text"
+                    value={getSettingValue('signal_threshold_percent') ? formatNumber(getSettingValue('signal_threshold_percent'), 3) : ''}
+                    onChange={(e) => {
+                      const parsed = parseFormattedNumber(e.target.value);
+                      updateSetting('signal_threshold_percent', parsed || 0);
+                    }}
+                    placeholder="0,000"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">Minimale MA-Differenz für Signale</p>
                 </div>
@@ -143,10 +157,14 @@ export default function SettingsPage() {
                     MA Short (Default)
                   </label>
                   <input
-                    type="number"
-                    value={getSettingValue('default_indicators_ma_short')}
-                    onChange={(e) => updateSetting('default_indicators_ma_short', parseInt(e.target.value) || 0)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    type="text"
+                    value={getSettingValue('default_indicators_ma_short') ? formatNumber(getSettingValue('default_indicators_ma_short'), 0) : ''}
+                    onChange={(e) => {
+                      const parsed = parseFormattedNumber(e.target.value);
+                      updateSetting('default_indicators_ma_short', parsed ? Math.floor(parsed) : 0);
+                    }}
+                    placeholder="0"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                   />
                 </div>
                 <div>
@@ -154,10 +172,14 @@ export default function SettingsPage() {
                     MA Long (Default)
                   </label>
                   <input
-                    type="number"
-                    value={getSettingValue('default_indicators_ma_long')}
-                    onChange={(e) => updateSetting('default_indicators_ma_long', parseInt(e.target.value) || 0)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    type="text"
+                    value={getSettingValue('default_indicators_ma_long') ? formatNumber(getSettingValue('default_indicators_ma_long'), 0) : ''}
+                    onChange={(e) => {
+                      const parsed = parseFormattedNumber(e.target.value);
+                      updateSetting('default_indicators_ma_long', parsed ? Math.floor(parsed) : 0);
+                    }}
+                    placeholder="0"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                   />
                 </div>
                 <div>
@@ -165,10 +187,14 @@ export default function SettingsPage() {
                     RSI Period (Default)
                   </label>
                   <input
-                    type="number"
-                    value={getSettingValue('default_indicators_rsi_period')}
-                    onChange={(e) => updateSetting('default_indicators_rsi_period', parseInt(e.target.value) || 0)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    type="text"
+                    value={getSettingValue('default_indicators_rsi_period') ? formatNumber(getSettingValue('default_indicators_rsi_period'), 0) : ''}
+                    onChange={(e) => {
+                      const parsed = parseFormattedNumber(e.target.value);
+                      updateSetting('default_indicators_rsi_period', parsed ? Math.floor(parsed) : 0);
+                    }}
+                    placeholder="0"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                   />
                 </div>
                 <div>
@@ -176,10 +202,14 @@ export default function SettingsPage() {
                     RSI Overbought (Default)
                   </label>
                   <input
-                    type="number"
-                    value={getSettingValue('default_indicators_rsi_overbought')}
-                    onChange={(e) => updateSetting('default_indicators_rsi_overbought', parseInt(e.target.value) || 0)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    type="text"
+                    value={getSettingValue('default_indicators_rsi_overbought') ? formatNumber(getSettingValue('default_indicators_rsi_overbought'), 0) : ''}
+                    onChange={(e) => {
+                      const parsed = parseFormattedNumber(e.target.value);
+                      updateSetting('default_indicators_rsi_overbought', parsed ? Math.floor(parsed) : 0);
+                    }}
+                    placeholder="0"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                   />
                 </div>
                 <div>
@@ -187,10 +217,14 @@ export default function SettingsPage() {
                     RSI Oversold (Default)
                   </label>
                   <input
-                    type="number"
-                    value={getSettingValue('default_indicators_rsi_oversold')}
-                    onChange={(e) => updateSetting('default_indicators_rsi_oversold', parseInt(e.target.value) || 0)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    type="text"
+                    value={getSettingValue('default_indicators_rsi_oversold') ? formatNumber(getSettingValue('default_indicators_rsi_oversold'), 0) : ''}
+                    onChange={(e) => {
+                      const parsed = parseFormattedNumber(e.target.value);
+                      updateSetting('default_indicators_rsi_oversold', parsed ? Math.floor(parsed) : 0);
+                    }}
+                    placeholder="0"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                   />
                 </div>
                 <div>
@@ -198,10 +232,14 @@ export default function SettingsPage() {
                     Max Price History
                   </label>
                   <input
-                    type="number"
-                    value={getSettingValue('max_price_history')}
-                    onChange={(e) => updateSetting('max_price_history', parseInt(e.target.value) || 0)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    type="text"
+                    value={getSettingValue('max_price_history') ? formatNumber(getSettingValue('max_price_history'), 0) : ''}
+                    onChange={(e) => {
+                      const parsed = parseFormattedNumber(e.target.value);
+                      updateSetting('max_price_history', parsed ? Math.floor(parsed) : 0);
+                    }}
+                    placeholder="0"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">Maximale Anzahl gespeicherter Preise</p>
                 </div>
@@ -217,10 +255,14 @@ export default function SettingsPage() {
                     Price Log Interval
                   </label>
                   <input
-                    type="number"
-                    value={getSettingValue('logging_price_log_interval')}
-                    onChange={(e) => updateSetting('logging_price_log_interval', parseInt(e.target.value) || 0)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    type="text"
+                    value={getSettingValue('logging_price_log_interval') ? formatNumber(getSettingValue('logging_price_log_interval'), 0) : ''}
+                    onChange={(e) => {
+                      const parsed = parseFormattedNumber(e.target.value);
+                      updateSetting('logging_price_log_interval', parsed ? Math.floor(parsed) : 0);
+                    }}
+                    placeholder="0"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">Preis alle X Updates loggen</p>
                 </div>
@@ -229,10 +271,14 @@ export default function SettingsPage() {
                     Hold Log Interval
                   </label>
                   <input
-                    type="number"
-                    value={getSettingValue('logging_hold_log_interval')}
-                    onChange={(e) => updateSetting('logging_hold_log_interval', parseInt(e.target.value) || 0)}
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                    type="text"
+                    value={getSettingValue('logging_hold_log_interval') ? formatNumber(getSettingValue('logging_hold_log_interval'), 0) : ''}
+                    onChange={(e) => {
+                      const parsed = parseFormattedNumber(e.target.value);
+                      updateSetting('logging_hold_log_interval', parsed ? Math.floor(parsed) : 0);
+                    }}
+                    placeholder="0"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">Hold-Signal alle X Updates loggen</p>
                 </div>
