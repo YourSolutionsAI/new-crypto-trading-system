@@ -414,7 +414,7 @@ app.get('/api/strategies', async (req, res) => {
 
     if (error) throw error;
 
-    // Erweitere Strategien mit Performance-Daten
+    // Erweitere Strategien mit Performance-Daten und normalisiere Config
     const strategiesWithPerf = await Promise.all(strategies.map(async (strategy) => {
       const { data: trades } = await supabase
         .from('trades')
@@ -426,13 +426,30 @@ app.get('/api/strategies', async (req, res) => {
       const totalPnl = trades?.reduce((sum, t) => sum + (t.pnl || 0), 0) || 0;
       const winRate = totalTrades > 0 ? (profitableTrades / totalTrades) * 100 : 0;
 
+      // Normalisiere Config für Frontend: Extrahiere indicators und risk
+      const config = strategy.config || {};
+      const normalizedConfig = {
+        ...config,
+        // MA Short/Long aus indicators extrahieren
+        ma_short: config.indicators?.ma_short,
+        ma_long: config.indicators?.ma_long,
+        // Trade Size aus risk extrahieren
+        trade_size_usdt: config.risk?.max_trade_size_usdt,
+        // Settings und Risk bleiben wie sie sind
+        settings: config.settings,
+        risk: config.risk,
+        // Indicators auch behalten für Vollständigkeit
+        indicators: config.indicators
+      };
+
       return {
         ...strategy,
         is_active: strategy.active, // Map "active" aus DB zu "is_active" für Frontend
         total_trades: totalTrades,
         profitable_trades: profitableTrades,
         total_pnl: totalPnl,
-        win_rate: winRate
+        win_rate: winRate,
+        config: normalizedConfig
       };
     }));
 
@@ -456,7 +473,36 @@ app.get('/api/strategies', async (req, res) => {
 app.put('/api/strategies/:id', async (req, res) => {
   try {
     const { id } = req.params;
-    const updates = req.body;
+    let updates = req.body;
+
+    // Wenn config übergeben wird, normalisiere es zurück zur DB-Struktur
+    if (updates.config) {
+      const config = updates.config;
+      const normalizedConfig = {
+        ...config,
+        // MA Short/Long zurück in indicators verschieben
+        indicators: {
+          ...config.indicators,
+          ma_short: config.ma_short ?? config.indicators?.ma_short,
+          ma_long: config.ma_long ?? config.indicators?.ma_long
+        },
+        // Trade Size zurück in risk verschieben
+        risk: {
+          ...config.risk,
+          max_trade_size_usdt: config.trade_size_usdt ?? config.risk?.max_trade_size_usdt
+        }
+      };
+      
+      // Entferne die normalisierten Felder aus dem Root-Level
+      delete normalizedConfig.ma_short;
+      delete normalizedConfig.ma_long;
+      delete normalizedConfig.trade_size_usdt;
+      
+      updates = {
+        ...updates,
+        config: normalizedConfig
+      };
+    }
 
     const { data: strategy, error } = await supabase
       .from('strategies')
@@ -632,6 +678,89 @@ app.get('/api/trades/stats', async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Fehler beim Laden der Trade-Statistiken',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Gibt Bot-Einstellungen zurück
+ */
+app.get('/api/bot-settings', async (req, res) => {
+  try {
+    const { data: settings, error } = await supabase
+      .from('bot_settings')
+      .select('*')
+      .order('key', { ascending: true });
+
+    if (error) throw error;
+
+    // Konvertiere Array zu Objekt für einfacheren Zugriff
+    const settingsObj = {};
+    settings.forEach(setting => {
+      settingsObj[setting.key] = setting.value;
+    });
+
+    res.json({
+      success: true,
+      settings: settingsObj,
+      raw: settings // Auch das rohe Array zurückgeben für Vollständigkeit
+    });
+  } catch (error) {
+    console.error('Fehler beim Laden der Bot-Einstellungen:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Laden der Bot-Einstellungen',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Aktualisiert Bot-Einstellungen
+ */
+app.put('/api/bot-settings', async (req, res) => {
+  try {
+    const { settings } = req.body; // Erwartet: { key: value, ... }
+
+    if (!settings || typeof settings !== 'object') {
+      return res.status(400).json({
+        success: false,
+        message: 'Ungültige Einstellungen'
+      });
+    }
+
+    for (const [key, value] of Object.entries(settings)) {
+      const { error } = await supabase
+        .from('bot_settings')
+        .update({ value: value, updated_at: new Date().toISOString() })
+        .eq('key', key);
+
+      if (error) {
+        console.error(`Fehler beim Aktualisieren von ${key}:`, error);
+        // Versuche zu erstellen falls nicht vorhanden
+        const { error: insertError } = await supabase
+          .from('bot_settings')
+          .insert({ key, value, updated_at: new Date().toISOString() });
+
+        if (insertError) {
+          throw insertError;
+        }
+      }
+    }
+
+    // Lade Bot-Settings neu (wichtig für laufenden Bot)
+    await loadBotSettings(true);
+
+    res.json({
+      success: true,
+      message: 'Bot-Einstellungen aktualisiert'
+    });
+  } catch (error) {
+    console.error('Fehler beim Aktualisieren der Bot-Einstellungen:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Aktualisieren der Bot-Einstellungen',
       error: error.message
     });
   }

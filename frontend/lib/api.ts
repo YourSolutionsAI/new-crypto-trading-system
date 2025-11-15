@@ -182,15 +182,17 @@ export const getStrategies = async (): Promise<Strategy[]> => {
         profitable_trades: strategy.profitable_trades ?? 0,
         config: {
           ...strategy.config,
-          ma_short: strategy.config?.ma_short ?? undefined,
-          ma_long: strategy.config?.ma_long ?? undefined,
-          trade_size_usdt: strategy.config?.trade_size_usdt ?? undefined,
+          // Die API gibt jetzt bereits normalisierte Werte zurück
+          ma_short: strategy.config?.ma_short ?? strategy.config?.indicators?.ma_short,
+          ma_long: strategy.config?.ma_long ?? strategy.config?.indicators?.ma_long,
+          trade_size_usdt: strategy.config?.trade_size_usdt ?? strategy.config?.risk?.max_trade_size_usdt,
           settings: strategy.config?.settings ? {
             signal_threshold_percent: strategy.config.settings.signal_threshold_percent ?? undefined,
             signal_cooldown_ms: strategy.config.settings.signal_cooldown_ms ?? undefined,
             trade_cooldown_ms: strategy.config.settings.trade_cooldown_ms ?? undefined,
           } : undefined,
           risk: strategy.config?.risk ? {
+            max_trade_size_usdt: strategy.config.risk.max_trade_size_usdt ?? undefined,
             stop_loss_percent: strategy.config.risk.stop_loss_percent ?? undefined,
             take_profit_percent: strategy.config.risk.take_profit_percent ?? undefined,
           } : undefined,
@@ -222,5 +224,26 @@ export const toggleStrategy = async (
     is_active: isActive,
   });
   return response.data.strategy;
+};
+
+// Bot Settings
+export interface BotSettings {
+  [key: string]: any;
+}
+
+export const getBotSettings = async (): Promise<BotSettings> => {
+  try {
+    const response = await api.get('/api/bot-settings');
+    return response.data.settings || {};
+  } catch (error) {
+    console.error('Fehler beim Laden der Bot-Einstellungen:', error);
+    return {};
+  }
+};
+
+export const updateBotSettings = async (
+  settings: Partial<BotSettings>
+): Promise<void> => {
+  await api.put('/api/bot-settings', { settings });
 };
 

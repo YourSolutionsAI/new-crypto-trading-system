@@ -8,7 +8,7 @@ export default function StrategiesPage() {
   const [strategies, setStrategies] = useState<Strategy[]>([]);
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editForm, setEditForm] = useState<Partial<Strategy['config']>>({});
+  const [editForm, setEditForm] = useState<any>({});
   
   // Helper type für settings mit optionalen Feldern
   type SettingsForm = {
@@ -45,9 +45,9 @@ export default function StrategiesPage() {
   const handleStartEdit = (strategy: Strategy) => {
     setEditingId(strategy.id);
     setEditForm({
-      ma_short: strategy.config?.ma_short,
-      ma_long: strategy.config?.ma_long,
-      trade_size_usdt: strategy.config?.trade_size_usdt,
+      ma_short: strategy.config?.ma_short ?? strategy.config?.indicators?.ma_short,
+      ma_long: strategy.config?.ma_long ?? strategy.config?.indicators?.ma_long,
+      trade_size_usdt: strategy.config?.trade_size_usdt ?? strategy.config?.risk?.max_trade_size_usdt,
       settings: strategy.config?.settings ? {
         signal_threshold_percent:
           strategy.config.settings.signal_threshold_percent ?? undefined,
@@ -55,6 +55,7 @@ export default function StrategiesPage() {
         trade_cooldown_ms: strategy.config.settings.trade_cooldown_ms ?? undefined,
       } : undefined,
       risk: strategy.config?.risk ? {
+        max_trade_size_usdt: strategy.config.risk.max_trade_size_usdt ?? undefined,
         stop_loss_percent: strategy.config.risk.stop_loss_percent ?? undefined,
         take_profit_percent: strategy.config.risk.take_profit_percent ?? undefined,
       } : undefined,
@@ -313,27 +314,25 @@ export default function StrategiesPage() {
                         <div>
                           <span className="text-gray-500">MA Short:</span>
                           <span className="ml-2 font-medium text-gray-900">
-                            {strategy.config.ma_short || '-'}
+                            {strategy.config?.ma_short ?? strategy.config?.indicators?.ma_short ?? '-'}
                           </span>
                         </div>
                         <div>
                           <span className="text-gray-500">MA Long:</span>
                           <span className="ml-2 font-medium text-gray-900">
-                            {strategy.config.ma_long || '-'}
+                            {strategy.config?.ma_long ?? strategy.config?.indicators?.ma_long ?? '-'}
                           </span>
                         </div>
                         <div>
                           <span className="text-gray-500">Trade Size:</span>
                           <span className="ml-2 font-medium text-gray-900">
-                            {strategy.config.trade_size_usdt || '-'} USDT
+                            {strategy.config?.trade_size_usdt ?? strategy.config?.risk?.max_trade_size_usdt ?? '-'} USDT
                           </span>
                         </div>
                         <div>
                           <span className="text-gray-500">Threshold:</span>
                           <span className="ml-2 font-medium text-gray-900">
-                            {strategy.config.settings?.signal_threshold_percent ||
-                              '-'}
-                            %
+                            {strategy.config?.settings?.signal_threshold_percent ?? '-'}%
                           </span>
                         </div>
                       </div>

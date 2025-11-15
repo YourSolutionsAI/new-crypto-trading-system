@@ -40,14 +40,28 @@ export interface Strategy {
     ma_short?: number;
     ma_long?: number;
     trade_size_usdt?: number;
+    indicators?: {
+      ma_short?: number;
+      ma_long?: number;
+      rsi_period?: number;
+      rsi_overbought?: number;
+      rsi_oversold?: number;
+      macd_fast_period?: number;
+      macd_slow_period?: number;
+      macd_signal_period?: number;
+      bollinger_period?: number;
+      bollinger_std_dev?: number;
+    };
     settings?: {
       signal_threshold_percent?: number;
       signal_cooldown_ms?: number;
       trade_cooldown_ms?: number;
     };
     risk?: {
+      max_trade_size_usdt?: number;
       stop_loss_percent?: number;
       take_profit_percent?: number;
+      max_concurrent_trades?: number;
     };
   };
   total_trades?: number;
