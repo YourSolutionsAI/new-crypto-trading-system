@@ -62,6 +62,8 @@ export interface Strategy {
       stop_loss_percent?: number;
       take_profit_percent?: number;
       max_concurrent_trades?: number;
+      use_trailing_stop?: boolean;
+      trailing_stop_activation_threshold?: number;
     };
   };
   total_trades?: number;

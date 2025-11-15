@@ -58,6 +58,8 @@ export default function StrategiesPage() {
         max_trade_size_usdt: strategy.config.risk.max_trade_size_usdt ?? undefined,
         stop_loss_percent: strategy.config.risk.stop_loss_percent ?? undefined,
         take_profit_percent: strategy.config.risk.take_profit_percent ?? undefined,
+        use_trailing_stop: strategy.config.risk.use_trailing_stop ?? false,
+        trailing_stop_activation_threshold: strategy.config.risk.trailing_stop_activation_threshold ?? undefined,
       } : undefined,
     });
   };
@@ -293,6 +295,76 @@ export default function StrategiesPage() {
                           />
                         </div>
                       </div>
+                      <div className="mt-4 border-t border-gray-200 pt-4">
+                        <h4 className="text-sm font-medium text-gray-900 mb-3">
+                          Trailing Stop Loss
+                        </h4>
+                        <div className="grid grid-cols-1 gap-4">
+                          <div className="flex items-center">
+                            <input
+                              type="checkbox"
+                              id={`trailing-stop-${strategy.id}`}
+                              checked={editForm.risk?.use_trailing_stop || false}
+                              onChange={(e) =>
+                                setEditForm({
+                                  ...editForm,
+                                  risk: {
+                                    ...editForm.risk,
+                                    use_trailing_stop: e.target.checked,
+                                  },
+                                })
+                              }
+                              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                            />
+                            <label
+                              htmlFor={`trailing-stop-${strategy.id}`}
+                              className="ml-2 block text-sm text-gray-900"
+                            >
+                              Trailing Stop Loss aktivieren
+                              <span className="ml-2 text-xs text-gray-500">
+                                (Stop Loss wird automatisch nachgezogen)
+                              </span>
+                            </label>
+                          </div>
+                          {editForm.risk?.use_trailing_stop && (
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700">
+                                Aktivierungs-Schwelle (%)
+                                <span className="ml-2 text-xs text-gray-500 font-normal">
+                                  (Mindest-Gewinn bevor Trailing aktiv wird, 0 = sofort)
+                                </span>
+                              </label>
+                              <input
+                                type="number"
+                                step="0.1"
+                                min="0"
+                                value={editForm.risk?.trailing_stop_activation_threshold || ''}
+                                onChange={(e) =>
+                                  setEditForm({
+                                    ...editForm,
+                                    risk: {
+                                      ...editForm.risk,
+                                      trailing_stop_activation_threshold: parseFloat(
+                                        e.target.value
+                                      ) || 0,
+                                    },
+                                  })
+                                }
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                                placeholder="0"
+                              />
+                            </div>
+                          )}
+                        </div>
+                        {editForm.risk?.use_trailing_stop && (
+                          <div className="mt-3 p-3 bg-blue-50 rounded-md">
+                            <p className="text-xs text-blue-800">
+                              <strong>Info:</strong> Bei aktiviertem Trailing Stop wird der Stop Loss automatisch nachgezogen, 
+                              wenn der Preis steigt. Take-Profit wird deaktiviert, da Trailing Stop größere Gewinne ermöglicht.
+                            </p>
+                          </div>
+                        )}
+                      </div>
                       <div className="flex space-x-3">
                         <button
                           onClick={() => handleSaveEdit(strategy.id)}
@@ -309,7 +381,7 @@ export default function StrategiesPage() {
                       </div>
                     </div>
                   ) : (
-                    <div className="mt-4">
+                      <div className="mt-4">
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                         <div>
                           <span className="text-gray-500">MA Short:</span>
@@ -335,6 +407,34 @@ export default function StrategiesPage() {
                             {strategy.config?.settings?.signal_threshold_percent ?? '-'}%
                           </span>
                         </div>
+                      </div>
+                      <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
+                        <div>
+                          <span className="text-gray-500">Stop-Loss:</span>
+                          <span className="ml-2 font-medium text-gray-900">
+                            {strategy.config?.risk?.stop_loss_percent ?? '-'}%
+                            {strategy.config?.risk?.use_trailing_stop && (
+                              <span className="ml-1 text-xs text-blue-600">(Trailing)</span>
+                            )}
+                          </span>
+                        </div>
+                        <div>
+                          <span className="text-gray-500">Take-Profit:</span>
+                          <span className="ml-2 font-medium text-gray-900">
+                            {strategy.config?.risk?.take_profit_percent ?? '-'}%
+                            {strategy.config?.risk?.use_trailing_stop && (
+                              <span className="ml-1 text-xs text-gray-400">(deaktiviert)</span>
+                            )}
+                          </span>
+                        </div>
+                        {strategy.config?.risk?.use_trailing_stop && (
+                          <div>
+                            <span className="text-gray-500">Trailing Aktivierung:</span>
+                            <span className="ml-2 font-medium text-gray-900">
+                              {strategy.config?.risk?.trailing_stop_activation_threshold ?? 0}%
+                            </span>
+                          </div>
+                        )}
                       </div>
                       {strategy.total_trades !== undefined && (
                         <div className="mt-3 grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">

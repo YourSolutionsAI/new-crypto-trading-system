@@ -84,6 +84,21 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
   try {
     console.log(`📊 Öffne/Erweitere Position: ${symbol} - ${quantity} @ ${price}`);
     
+    // Hole Strategie-Config für Trailing Stop Einstellungen
+    const { data: strategy, error: strategyError } = await supabase
+      .from('strategies')
+      .select('config')
+      .eq('id', strategyId)
+      .single();
+    
+    if (strategyError) {
+      console.warn(`⚠️  Konnte Strategie-Config nicht laden: ${strategyError.message}`);
+    }
+    
+    const useTrailingStop = strategy?.config?.risk?.use_trailing_stop === true;
+    const stopLossPercent = strategy?.config?.risk?.stop_loss_percent ?? 0;
+    const activationThreshold = strategy?.config?.risk?.trailing_stop_activation_threshold ?? 0;
+    
     // Prüfe ob bereits eine offene Position existiert
     const { data: existingPosition, error: fetchError } = await supabase
       .from('positions')
@@ -103,43 +118,84 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
       const newTotalQuantity = existingPosition.quantity + quantity;
       const newEntryPrice = newTotalValue / newTotalQuantity;
       
+      // Trailing Stop: highest_price = MAX(altes_highest_price, neuer_entry_price)
+      const oldHighestPrice = existingPosition.highest_price ? parseFloat(existingPosition.highest_price) : parseFloat(existingPosition.entry_price);
+      const newHighestPrice = Math.max(oldHighestPrice, newEntryPrice);
+      
+      // Berechne neuen Trailing Stop Preis (wenn Trailing aktiv)
+      let newTrailingStopPrice = existingPosition.trailing_stop_price;
+      if (useTrailingStop && stopLossPercent > 0) {
+        newTrailingStopPrice = newHighestPrice * (1 - stopLossPercent / 100);
+      }
+      
+      const updateData = {
+        quantity: newTotalQuantity,
+        entry_price: newEntryPrice,
+        total_buy_quantity: existingPosition.total_buy_quantity + quantity,
+        total_buy_value: newTotalValue,
+        highest_price: newHighestPrice,
+        updated_at: new Date().toISOString()
+      };
+      
+      // Update Trailing Stop Felder nur wenn Trailing aktiv
+      if (useTrailingStop) {
+        updateData.trailing_stop_price = newTrailingStopPrice;
+        updateData.use_trailing_stop = true;
+        updateData.trailing_stop_activation_threshold = activationThreshold;
+      }
+      
       const { data: updatedPosition, error: updateError } = await supabase
         .from('positions')
-        .update({
-          quantity: newTotalQuantity,
-          entry_price: newEntryPrice,
-          total_buy_quantity: existingPosition.total_buy_quantity + quantity,
-          total_buy_value: newTotalValue,
-          updated_at: new Date().toISOString()
-        })
+        .update(updateData)
         .eq('id', existingPosition.id)
         .select()
         .single();
       
       if (updateError) throw updateError;
       
-      console.log(`✅ Position erweitert: ${symbol} - Neue Menge: ${newTotalQuantity}, Neuer Durchschnittspreis: ${newEntryPrice}`);
+      const trailingInfo = useTrailingStop 
+        ? ` | Trailing Stop: ${newTrailingStopPrice.toFixed(6)} (Highest: ${newHighestPrice.toFixed(6)})`
+        : '';
+      console.log(`✅ Position erweitert: ${symbol} - Neue Menge: ${newTotalQuantity}, Neuer Durchschnittspreis: ${newEntryPrice}${trailingInfo}`);
       return updatedPosition;
     } else {
       // Neue Position erstellen
+      const initialHighestPrice = price;
+      const initialTrailingStopPrice = useTrailingStop && stopLossPercent > 0
+        ? initialHighestPrice * (1 - stopLossPercent / 100)
+        : null;
+      
+      const insertData = {
+        strategy_id: strategyId,
+        symbol: symbol,
+        quantity: quantity,
+        entry_price: price,
+        total_buy_quantity: quantity,
+        total_buy_value: quantity * price,
+        status: 'open',
+        opened_at: new Date().toISOString(),
+        highest_price: initialHighestPrice
+      };
+      
+      // Füge Trailing Stop Felder hinzu wenn aktiv
+      if (useTrailingStop) {
+        insertData.trailing_stop_price = initialTrailingStopPrice;
+        insertData.use_trailing_stop = true;
+        insertData.trailing_stop_activation_threshold = activationThreshold;
+      }
+      
       const { data: newPosition, error: insertError } = await supabase
         .from('positions')
-        .insert({
-          strategy_id: strategyId,
-          symbol: symbol,
-          quantity: quantity,
-          entry_price: price,
-          total_buy_quantity: quantity,
-          total_buy_value: quantity * price,
-          status: 'open',
-          opened_at: new Date().toISOString()
-        })
+        .insert(insertData)
         .select()
         .single();
       
       if (insertError) throw insertError;
       
-      console.log(`✅ Neue Position geöffnet: ${symbol} - ${quantity} @ ${price}`);
+      const trailingInfo = useTrailingStop 
+        ? ` | Trailing Stop: ${initialTrailingStopPrice.toFixed(6)}`
+        : '';
+      console.log(`✅ Neue Position geöffnet: ${symbol} - ${quantity} @ ${price}${trailingInfo}`);
       return newPosition;
     }
   } catch (error) {
@@ -261,16 +317,28 @@ async function loadOpenPositionsFromDB() {
     
     for (const position of (positions || [])) {
       const positionKey = `${position.strategy_id}_${position.symbol}`;
+      const entryPrice = parseFloat(position.entry_price);
+      const highestPrice = position.highest_price ? parseFloat(position.highest_price) : entryPrice;
+      const trailingStopPrice = position.trailing_stop_price ? parseFloat(position.trailing_stop_price) : null;
+      
       openPositions.set(positionKey, {
         symbol: position.symbol,
-        entryPrice: parseFloat(position.entry_price),
+        entryPrice: entryPrice,
         quantity: parseFloat(position.quantity),
         orderId: position.id, // Verwende Position-ID statt Order-ID
         timestamp: new Date(position.opened_at),
-        strategyId: position.strategy_id
+        strategyId: position.strategy_id,
+        // Trailing Stop Loss Felder
+        highestPrice: highestPrice,
+        trailingStopPrice: trailingStopPrice,
+        useTrailingStop: position.use_trailing_stop === true,
+        trailingStopActivationThreshold: position.trailing_stop_activation_threshold ? parseFloat(position.trailing_stop_activation_threshold) : 0
       });
       
-      console.log(`✅ Position geladen: ${position.symbol} - ${position.quantity} @ ${position.entry_price}`);
+      const trailingInfo = position.use_trailing_stop 
+        ? ` | Trailing Stop: ${trailingStopPrice ? trailingStopPrice.toFixed(6) : 'N/A'} (Highest: ${highestPrice.toFixed(6)})`
+        : '';
+      console.log(`✅ Position geladen: ${position.symbol} - ${position.quantity} @ ${position.entry_price}${trailingInfo}`);
     }
     
     console.log(`✅ ${openPositions.size} offene Position(en) geladen`);
@@ -1873,6 +1941,7 @@ function analyzePrice(currentPrice, strategy) {
 
 /**
  * Prüft offene Positionen auf Stop-Loss und Take-Profit
+ * Unterstützt sowohl statischen als auch Trailing Stop Loss
  * @param {number} currentPrice - Der aktuelle Preis
  * @param {string} symbol - Das Trading-Symbol
  */
@@ -1880,6 +1949,11 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
   // Prüfe alle offenen Positionen für dieses Symbol
   for (const [positionKey, position] of openPositions.entries()) {
     if (position.symbol !== symbol) continue;
+
+    // Position-Check: Stelle sicher dass Position noch existiert (Race Condition Schutz)
+    if (!openPositions.has(positionKey)) {
+      continue;
+    }
 
     // Finde die zugehörige Strategie
     const strategy = activeStrategies.find(s => s.id === position.strategyId);
@@ -1889,20 +1963,118 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
     }
 
     // Hole Stop-Loss und Take-Profit aus Strategie-Config
-    // Stop-Loss und Take-Profit sind optional (0 bedeutet deaktiviert)
     const stopLossPercent = strategy.config.risk?.stop_loss_percent ?? 0;
     const takeProfitPercent = strategy.config.risk?.take_profit_percent ?? 0;
+    const useTrailingStop = strategy.config.risk?.use_trailing_stop === true;
+    const activationThreshold = strategy.config.risk?.trailing_stop_activation_threshold ?? 0;
 
     // Wenn beide deaktiviert sind, überspringe
     if (stopLossPercent === 0 && takeProfitPercent === 0) {
       continue;
     }
 
-    // Berechne Preisänderung in Prozent
+    // Berechne Preisänderung in Prozent (relativ zum Entry Price)
     const priceChangePercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
 
-    // Stop-Loss prüfen
-    if (stopLossPercent > 0 && priceChangePercent <= -stopLossPercent) {
+    // TRAILING STOP LOSS LOGIK
+    if (useTrailingStop && stopLossPercent > 0) {
+      // Initialisiere Trailing Stop Felder falls nicht vorhanden
+      let highestPrice = position.highestPrice ?? position.entryPrice;
+      let trailingStopPrice = position.trailingStopPrice;
+      const trailingActivationThreshold = position.trailingStopActivationThreshold ?? activationThreshold;
+
+      // Prüfe ob Trailing Stop aktiviert werden soll (Mindest-Gewinn-Schwelle)
+      const shouldActivateTrailing = trailingActivationThreshold === 0 || priceChangePercent >= trailingActivationThreshold;
+
+      if (shouldActivateTrailing) {
+        // Update highest_price wenn currentPrice > highestPrice
+        if (currentPrice > highestPrice) {
+          highestPrice = currentPrice;
+          
+          // Berechne neuen Trailing Stop Preis
+          trailingStopPrice = highestPrice * (1 - stopLossPercent / 100);
+          
+          // Update In-Memory Map
+          position.highestPrice = highestPrice;
+          position.trailingStopPrice = trailingStopPrice;
+          
+          // Update Datenbank (asynchron, nicht blockierend)
+          supabase
+            .from('positions')
+            .update({
+              highest_price: highestPrice,
+              trailing_stop_price: trailingStopPrice,
+              updated_at: new Date().toISOString()
+            })
+            .eq('strategy_id', position.strategyId)
+            .eq('symbol', symbol)
+            .eq('status', 'open')
+            .then(() => {
+              // Optional: Logging für Trailing Stop Updates (nur bei signifikanten Änderungen)
+            })
+            .catch(err => {
+              console.warn(`⚠️  Fehler beim Update von Trailing Stop: ${err.message}`);
+            });
+        }
+
+        // Prüfe ob Trailing Stop ausgelöst wurde
+        if (trailingStopPrice && currentPrice <= trailingStopPrice) {
+          const trailingPriceChangePercent = ((currentPrice - highestPrice) / highestPrice) * 100;
+          
+          console.log('');
+          console.log('═══════════════════════════════════════════════');
+          console.log(`🔄 TRAILING STOP-LOSS AUSGELÖST [${symbol}]`);
+          console.log('═══════════════════════════════════════════════');
+          console.log(`📊 Position: ${positionKey}`);
+          console.log(`💰 Entry Price: ${position.entryPrice.toFixed(6)} USDT`);
+          console.log(`📈 Highest Price: ${highestPrice.toFixed(6)} USDT`);
+          console.log(`🔄 Trailing Stop Price: ${trailingStopPrice.toFixed(6)} USDT`);
+          console.log(`📉 Current Price: ${currentPrice.toFixed(6)} USDT`);
+          console.log(`📊 Preisänderung (Entry): ${priceChangePercent.toFixed(2)}%`);
+          console.log(`📊 Preisänderung (Highest): ${trailingPriceChangePercent.toFixed(2)}%`);
+          console.log(`🛑 Trailing Stop: ${stopLossPercent}%`);
+          console.log('═══════════════════════════════════════════════');
+          console.log('');
+
+          await logBotEvent('warning', `Trailing Stop-Loss ausgelöst: ${symbol}`, {
+            positionKey: positionKey,
+            entryPrice: position.entryPrice,
+            highestPrice: highestPrice,
+            trailingStopPrice: trailingStopPrice,
+            currentPrice: currentPrice,
+            priceChangePercent: priceChangePercent,
+            trailingPriceChangePercent: trailingPriceChangePercent,
+            stopLossPercent: stopLossPercent,
+            symbol: symbol,
+            strategy_id: strategy.id
+          });
+
+          // Erstelle SELL-Signal für Trailing Stop-Loss
+          const trailingStopSignal = {
+            action: 'sell',
+            price: currentPrice,
+            reason: `Trailing Stop-Loss ausgelöst: ${currentPrice.toFixed(6)} <= ${trailingStopPrice.toFixed(6)} (${trailingPriceChangePercent.toFixed(2)}% von Highest)`,
+            stopLoss: true,
+            takeProfit: false,
+            trailingStop: true,
+            _positionData: position
+          };
+
+          // Position SOFORT entfernen, um Race-Conditions zu vermeiden
+          openPositions.delete(positionKey);
+
+          // Trade ausführen
+          if (tradingEnabled && binanceClient) {
+            await executeTrade(trailingStopSignal, strategy);
+          }
+
+          continue; // Überspringe Take-Profit Prüfung
+        }
+      }
+    }
+
+    // STATISCHER STOP-LOSS LOGIK (wenn Trailing Stop nicht aktiv oder noch nicht aktiviert)
+    if (!useTrailingStop && stopLossPercent > 0 && priceChangePercent <= -stopLossPercent) {
       console.log('');
       console.log('═══════════════════════════════════════════════');
       console.log(`🛑 STOP-LOSS AUSGELÖST [${symbol}]`);
@@ -1932,6 +2104,7 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
         reason: `Stop-Loss ausgelöst: ${priceChangePercent.toFixed(2)}% <= -${stopLossPercent}%`,
         stopLoss: true,
         takeProfit: false,
+        trailingStop: false,
         _positionData: position
       };
 
@@ -1943,11 +2116,16 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
         await executeTrade(stopLossSignal, strategy);
       }
 
-      continue;
+      continue; // Überspringe Take-Profit Prüfung
     }
 
-    // Take-Profit prüfen
+    // TAKE-PROFIT PRÜFUNG (kann parallel zu Trailing Stop laufen, wenn aktiviert)
     if (takeProfitPercent > 0 && priceChangePercent >= takeProfitPercent) {
+      // Wenn Trailing Stop aktiv ist, überspringe Take-Profit (Trailing Stop hat Priorität)
+      if (useTrailingStop) {
+        continue;
+      }
+
       console.log('');
       console.log('═══════════════════════════════════════════════');
       console.log(`🎯 TAKE-PROFIT AUSGELÖST [${symbol}]`);
@@ -1977,6 +2155,7 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
         reason: `Take-Profit ausgelöst: ${priceChangePercent.toFixed(2)}% >= +${takeProfitPercent}%`,
         stopLoss: false,
         takeProfit: true,
+        trailingStop: false,
         _positionData: position
       };
 
@@ -2389,30 +2568,69 @@ async function executeTrade(signal, strategy) {
         
         // Update In-Memory Map für schnellen Zugriff
         const existingPos = openPositions.get(positionKey);
+        const useTrailingStop = strategy.config.risk?.use_trailing_stop === true;
+        const stopLossPercent = strategy.config.risk?.stop_loss_percent ?? 0;
+        const activationThreshold = strategy.config.risk?.trailing_stop_activation_threshold ?? 0;
+        
         if (existingPos) {
           // Position erweitert - berechne neuen Durchschnittspreis
           const newTotalValue = (existingPos.quantity * existingPos.entryPrice) + (executedQty * avgPrice);
           const newTotalQuantity = existingPos.quantity + executedQty;
           const newAvgPrice = newTotalValue / newTotalQuantity;
           
-          openPositions.set(positionKey, {
+          // Trailing Stop: highest_price = MAX(altes_highest_price, neuer_entry_price)
+          const oldHighestPrice = existingPos.highestPrice ?? existingPos.entryPrice;
+          const newHighestPrice = Math.max(oldHighestPrice, newAvgPrice);
+          
+          // Berechne neuen Trailing Stop Preis (wenn Trailing aktiv)
+          let newTrailingStopPrice = existingPos.trailingStopPrice;
+          if (useTrailingStop && stopLossPercent > 0) {
+            newTrailingStopPrice = newHighestPrice * (1 - stopLossPercent / 100);
+          }
+          
+          const updatedPosition = {
             symbol: symbol,
             entryPrice: newAvgPrice,
             quantity: newTotalQuantity,
             orderId: order.orderId,
             timestamp: new Date(),
             strategyId: strategy.id
-          });
+          };
+          
+          // Füge Trailing Stop Felder hinzu wenn aktiv
+          if (useTrailingStop) {
+            updatedPosition.highestPrice = newHighestPrice;
+            updatedPosition.trailingStopPrice = newTrailingStopPrice;
+            updatedPosition.useTrailingStop = true;
+            updatedPosition.trailingStopActivationThreshold = activationThreshold;
+          }
+          
+          openPositions.set(positionKey, updatedPosition);
         } else {
           // Neue Position
-          openPositions.set(positionKey, {
+          const initialHighestPrice = avgPrice;
+          const initialTrailingStopPrice = useTrailingStop && stopLossPercent > 0
+            ? initialHighestPrice * (1 - stopLossPercent / 100)
+            : null;
+          
+          const newPosition = {
             symbol: symbol,
             entryPrice: avgPrice,
             quantity: executedQty,
             orderId: order.orderId,
             timestamp: new Date(),
             strategyId: strategy.id
-          });
+          };
+          
+          // Füge Trailing Stop Felder hinzu wenn aktiv
+          if (useTrailingStop) {
+            newPosition.highestPrice = initialHighestPrice;
+            newPosition.trailingStopPrice = initialTrailingStopPrice;
+            newPosition.useTrailingStop = true;
+            newPosition.trailingStopActivationThreshold = activationThreshold;
+          }
+          
+          openPositions.set(positionKey, newPosition);
         }
         
         await logBotEvent('info', `Position geöffnet/erweitert: ${symbol}`, {
@@ -2733,8 +2951,61 @@ async function runBacktest(strategy, symbol, startDate, endDate, timeframe = '1h
         // Stop-Loss und Take-Profit sind optional (0 bedeutet deaktiviert)
         const stopLossPercent = strategy.config.risk?.stop_loss_percent ?? 0;
         const takeProfitPercent = strategy.config.risk?.take_profit_percent ?? 0;
+        const useTrailingStop = strategy.config.risk?.use_trailing_stop === true;
+        const activationThreshold = strategy.config.risk?.trailing_stop_activation_threshold ?? 0;
 
-        if (stopLossPercent > 0 && priceChangePercent <= -stopLossPercent) {
+        // TRAILING STOP LOSS LOGIK
+        if (useTrailingStop && stopLossPercent > 0) {
+          // Initialisiere Trailing Stop Felder falls nicht vorhanden
+          let highestPrice = position.highestPrice ?? position.entryPrice;
+          let trailingStopPrice = position.trailingStopPrice;
+          const trailingActivationThreshold = position.trailingStopActivationThreshold ?? activationThreshold;
+
+          // Prüfe ob Trailing Stop aktiviert werden soll (Mindest-Gewinn-Schwelle)
+          const shouldActivateTrailing = trailingActivationThreshold === 0 || priceChangePercent >= trailingActivationThreshold;
+
+          if (shouldActivateTrailing) {
+            // Update highest_price wenn currentPrice > highestPrice
+            if (currentPrice > highestPrice) {
+              highestPrice = currentPrice;
+              trailingStopPrice = highestPrice * (1 - stopLossPercent / 100);
+              
+              // Update Position
+              position.highestPrice = highestPrice;
+              position.trailingStopPrice = trailingStopPrice;
+            }
+
+            // Prüfe ob Trailing Stop ausgelöst wurde
+            if (trailingStopPrice && currentPrice <= trailingStopPrice) {
+              const trailingPriceChangePercent = ((currentPrice - highestPrice) / highestPrice) * 100;
+              const pnl = (currentPrice - position.entryPrice) * position.quantity;
+              totalPnl += pnl;
+              currentBalance += pnl;
+              
+              trades.push({
+                entryPrice: position.entryPrice,
+                exitPrice: currentPrice,
+                quantity: position.quantity,
+                pnl: pnl,
+                pnlPercent: priceChangePercent,
+                reason: 'trailing_stop_loss',
+                highestPrice: highestPrice,
+                trailingStopPrice: trailingStopPrice,
+                trailingPriceChangePercent: trailingPriceChangePercent,
+                timestamp: timestamp
+              });
+
+              if (pnl > 0) winCount++;
+              else lossCount++;
+
+              position = null;
+              continue;
+            }
+          }
+        }
+
+        // STATISCHER STOP-LOSS LOGIK (wenn Trailing Stop nicht aktiv oder noch nicht aktiviert)
+        if (!useTrailingStop && stopLossPercent > 0 && priceChangePercent <= -stopLossPercent) {
           // Stop-Loss ausgelöst
           const pnl = (currentPrice - position.entryPrice) * position.quantity;
           totalPnl += pnl;
@@ -2757,27 +3028,33 @@ async function runBacktest(strategy, symbol, startDate, endDate, timeframe = '1h
           continue;
         }
 
+        // TAKE-PROFIT PRÜFUNG (kann parallel zu Trailing Stop laufen, wenn aktiviert)
         if (takeProfitPercent > 0 && priceChangePercent >= takeProfitPercent) {
-          // Take-Profit ausgelöst
-          const pnl = (currentPrice - position.entryPrice) * position.quantity;
-          totalPnl += pnl;
-          currentBalance += pnl;
-          
-          trades.push({
-            entryPrice: position.entryPrice,
-            exitPrice: currentPrice,
-            quantity: position.quantity,
-            pnl: pnl,
-            pnlPercent: priceChangePercent,
-            reason: 'take_profit',
-            timestamp: timestamp
-          });
+          // Wenn Trailing Stop aktiv ist, überspringe Take-Profit (Trailing Stop hat Priorität)
+          if (useTrailingStop) {
+            // Skip Take-Profit wenn Trailing aktiv
+          } else {
+            // Take-Profit ausgelöst
+            const pnl = (currentPrice - position.entryPrice) * position.quantity;
+            totalPnl += pnl;
+            currentBalance += pnl;
+            
+            trades.push({
+              entryPrice: position.entryPrice,
+              exitPrice: currentPrice,
+              quantity: position.quantity,
+              pnl: pnl,
+              pnlPercent: priceChangePercent,
+              reason: 'take_profit',
+              timestamp: timestamp
+            });
 
-          if (pnl > 0) winCount++;
-          else lossCount++;
+            if (pnl > 0) winCount++;
+            else lossCount++;
 
-          position = null;
-          continue;
+            position = null;
+            continue;
+          }
         }
       }
 
@@ -2790,11 +3067,23 @@ async function runBacktest(strategy, symbol, startDate, endDate, timeframe = '1h
         }
         const quantity = tradeSize / currentPrice;
         
+        const useTrailingStop = strategy.config.risk?.use_trailing_stop === true;
+        const stopLossPercent = strategy.config.risk?.stop_loss_percent ?? 0;
+        const activationThreshold = strategy.config.risk?.trailing_stop_activation_threshold ?? 0;
+        
         position = {
           entryPrice: currentPrice,
           quantity: quantity,
           timestamp: timestamp
         };
+        
+        // Initialisiere Trailing Stop Felder wenn aktiv
+        if (useTrailingStop && stopLossPercent > 0) {
+          position.highestPrice = currentPrice;
+          position.trailingStopPrice = currentPrice * (1 - stopLossPercent / 100);
+          position.useTrailingStop = true;
+          position.trailingStopActivationThreshold = activationThreshold;
+        }
       } else if (signal.action === 'sell' && position) {
         const pnl = (currentPrice - position.entryPrice) * position.quantity;
         const pnlPercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
