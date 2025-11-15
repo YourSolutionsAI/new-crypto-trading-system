@@ -149,6 +149,18 @@ export const getPositions = async (): Promise<Position[]> => {
       currentPrice: pos.currentPrice || 0,
       pnl: pos.pnl || 0,
       pnlPercent: pos.pnlPercent || 0,
+      // Fehlende Felder hinzufügen:
+      id: pos.id,
+      strategyId: pos.strategyId,
+      strategyName: pos.strategyName,
+      createdAt: pos.createdAt,
+      // Verkaufsinformationen hinzufügen:
+      maShort: pos.maShort ?? null,
+      maLong: pos.maLong ?? null,
+      maCrossSellPrice: pos.maCrossSellPrice ?? null,
+      stopLossPrice: pos.stopLossPrice ?? null,
+      trailingStopPrice: pos.trailingStopPrice ?? null,
+      useTrailingStop: pos.useTrailingStop ?? false,
     }));
   } catch (error) {
     console.error('Fehler beim Laden der Positionen:', error);
