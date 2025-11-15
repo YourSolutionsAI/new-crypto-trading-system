@@ -67,6 +67,217 @@ let botSettings = {}; // Bot-Einstellungen aus Supabase
 let lotSizes = {}; // Lot Size Regeln aus Supabase
 let settingsReloadInterval = null; // Interval für automatisches Neuladen der Einstellungen
 
+// ================================================================
+// POSITION MANAGEMENT FUNKTIONEN
+// ================================================================
+
+/**
+ * Öffnet oder erweitert eine Position in der Datenbank
+ * @param {string} strategyId - Strategy ID
+ * @param {string} symbol - Trading Symbol (z.B. BTCUSDT)
+ * @param {number} quantity - Gekaufte Menge
+ * @param {number} price - Kaufpreis
+ * @returns {Object} Position-Daten
+ */
+async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
+  try {
+    console.log(`📊 Öffne/Erweitere Position: ${symbol} - ${quantity} @ ${price}`);
+    
+    // Prüfe ob bereits eine offene Position existiert
+    const { data: existingPosition, error: fetchError } = await supabase
+      .from('positions')
+      .select('*')
+      .eq('strategy_id', strategyId)
+      .eq('symbol', symbol)
+      .eq('status', 'open')
+      .single();
+    
+    if (fetchError && fetchError.code !== 'PGRST116') { // PGRST116 = no rows returned
+      throw fetchError;
+    }
+    
+    if (existingPosition) {
+      // Position erweitern (Average Up/Down)
+      const newTotalValue = existingPosition.total_buy_value + (quantity * price);
+      const newTotalQuantity = existingPosition.quantity + quantity;
+      const newEntryPrice = newTotalValue / newTotalQuantity;
+      
+      const { data: updatedPosition, error: updateError } = await supabase
+        .from('positions')
+        .update({
+          quantity: newTotalQuantity,
+          entry_price: newEntryPrice,
+          total_buy_quantity: existingPosition.total_buy_quantity + quantity,
+          total_buy_value: newTotalValue,
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', existingPosition.id)
+        .select()
+        .single();
+      
+      if (updateError) throw updateError;
+      
+      console.log(`✅ Position erweitert: ${symbol} - Neue Menge: ${newTotalQuantity}, Neuer Durchschnittspreis: ${newEntryPrice}`);
+      return updatedPosition;
+    } else {
+      // Neue Position erstellen
+      const { data: newPosition, error: insertError } = await supabase
+        .from('positions')
+        .insert({
+          strategy_id: strategyId,
+          symbol: symbol,
+          quantity: quantity,
+          entry_price: price,
+          total_buy_quantity: quantity,
+          total_buy_value: quantity * price,
+          status: 'open',
+          opened_at: new Date().toISOString()
+        })
+        .select()
+        .single();
+      
+      if (insertError) throw insertError;
+      
+      console.log(`✅ Neue Position geöffnet: ${symbol} - ${quantity} @ ${price}`);
+      return newPosition;
+    }
+  } catch (error) {
+    console.error('❌ Fehler beim Öffnen/Erweitern der Position:', error);
+    throw error;
+  }
+}
+
+/**
+ * Reduziert oder schließt eine Position in der Datenbank
+ * @param {string} strategyId - Strategy ID
+ * @param {string} symbol - Trading Symbol (z.B. BTCUSDT)
+ * @param {number} quantity - Verkaufte Menge
+ * @returns {Object} Ergebnis mit entry_price für PnL-Berechnung
+ */
+async function reduceOrClosePosition(strategyId, symbol, quantity) {
+  try {
+    console.log(`📊 Reduziere/Schließe Position: ${symbol} - ${quantity}`);
+    
+    // Hole aktuelle Position
+    const { data: position, error: fetchError } = await supabase
+      .from('positions')
+      .select('*')
+      .eq('strategy_id', strategyId)
+      .eq('symbol', symbol)
+      .eq('status', 'open')
+      .single();
+    
+    if (fetchError || !position) {
+      console.warn(`⚠️  Keine offene Position gefunden für ${symbol}`);
+      return {
+        action: 'no_position',
+        entry_price: 0,
+        remaining_quantity: 0
+      };
+    }
+    
+    const remainingQuantity = position.quantity - quantity;
+    
+    if (remainingQuantity <= 0.00000001) {
+      // Position komplett schließen
+      const { error: updateError } = await supabase
+        .from('positions')
+        .update({
+          quantity: 0,
+          status: 'closed',
+          closed_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', position.id);
+      
+      if (updateError) throw updateError;
+      
+      console.log(`✅ Position geschlossen: ${symbol}`);
+      
+      // Entferne aus der In-Memory Map
+      const positionKey = `${strategyId}_${symbol}`;
+      if (openPositions.has(positionKey)) {
+        openPositions.delete(positionKey);
+      }
+      
+      return {
+        action: 'closed',
+        entry_price: position.entry_price,
+        remaining_quantity: 0
+      };
+    } else {
+      // Position teilweise reduzieren
+      const { error: updateError } = await supabase
+        .from('positions')
+        .update({
+          quantity: remainingQuantity,
+          status: 'partial',
+          updated_at: new Date().toISOString()
+        })
+        .eq('id', position.id);
+      
+      if (updateError) throw updateError;
+      
+      console.log(`✅ Position reduziert: ${symbol} - Verbleibend: ${remainingQuantity}`);
+      
+      // Update In-Memory Map
+      const positionKey = `${strategyId}_${symbol}`;
+      if (openPositions.has(positionKey)) {
+        const memPosition = openPositions.get(positionKey);
+        memPosition.quantity = remainingQuantity;
+      }
+      
+      return {
+        action: 'reduced',
+        entry_price: position.entry_price,
+        remaining_quantity: remainingQuantity
+      };
+    }
+  } catch (error) {
+    console.error('❌ Fehler beim Reduzieren/Schließen der Position:', error);
+    throw error;
+  }
+}
+
+/**
+ * Lädt alle offenen Positionen aus der Datenbank
+ * (Ersetzt die alte loadOpenPositions Funktion)
+ */
+async function loadOpenPositionsFromDB() {
+  try {
+    console.log('📊 Lade offene Positionen aus der Datenbank...');
+    
+    const { data: positions, error } = await supabase
+      .from('positions')
+      .select('*')
+      .eq('status', 'open')
+      .gt('quantity', 0);
+    
+    if (error) throw error;
+    
+    // Clear und neu befüllen der In-Memory Map
+    openPositions.clear();
+    
+    for (const position of (positions || [])) {
+      const positionKey = `${position.strategy_id}_${position.symbol}`;
+      openPositions.set(positionKey, {
+        symbol: position.symbol,
+        entryPrice: parseFloat(position.entry_price),
+        quantity: parseFloat(position.quantity),
+        orderId: position.id, // Verwende Position-ID statt Order-ID
+        timestamp: new Date(position.opened_at),
+        strategyId: position.strategy_id
+      });
+      
+      console.log(`✅ Position geladen: ${position.symbol} - ${position.quantity} @ ${position.entry_price}`);
+    }
+    
+    console.log(`✅ ${openPositions.size} offene Position(en) geladen`);
+  } catch (error) {
+    console.error('❌ Fehler beim Laden der offenen Positionen:', error);
+  }
+}
+
 // API-Routen
 
 /**
@@ -428,155 +639,68 @@ app.get('/api/trades/stats', async (req, res) => {
 
 /**
  * Gibt offene Positionen zurück
- * WICHTIG: Berechnet Positionen aus der Datenbank (BUY ohne entsprechenden SELL)
- * Nicht nur aus der in-memory Map, sondern immer aktuell aus der DB
+ * Nutzt die neue positions Tabelle für explizites Position-Tracking
  */
 app.get('/api/positions', async (req, res) => {
   try {
-    // Lade nur AKTIVE Strategien, um nur relevante offene Positionen zu finden
-    const { data: allStrategies, error: strategiesError } = await supabase
-      .from('strategies')
-      .select('id, symbol, name, active')
-      .eq('active', true); // NUR aktive Strategien
+    // Lade offene Positionen aus der positions Tabelle mit Strategy-Infos
+    const { data: positions, error } = await supabase
+      .from('positions')
+      .select(`
+        *,
+        strategies:strategy_id (
+          id,
+          name,
+          symbol
+        )
+      `)
+      .eq('status', 'open')
+      .gt('quantity', 0);
     
-    if (strategiesError) {
-      console.error('Fehler beim Laden der Strategien:', strategiesError);
-      throw strategiesError;
+    if (error) {
+      console.error('Fehler beim Laden der Positionen:', error);
+      throw error;
     }
     
-    console.log(`📊 Prüfe ${allStrategies?.length || 0} aktive Strategien auf offene Positionen`);
+    console.log(`📊 ${positions?.length || 0} offene Positionen gefunden`);
     
     const allPositions = [];
     
-    // Für jede aktive Strategie prüfen, ob es offene Positionen gibt
-    for (const strategy of (allStrategies || [])) {
-      const symbol = strategy.symbol;
-      
-      // Lade alle BUY-Trades chronologisch sortiert
-      const { data: buyTrades, error: buyError } = await supabase
-        .from('trades')
-        .select('*')
-        .eq('strategy_id', strategy.id)
-        .eq('symbol', symbol)
-        .eq('side', 'buy')
-        .eq('status', 'executed')
-        .order('executed_at', { ascending: true });
-      
-      if (buyError) {
-        console.error(`❌ Fehler beim Laden der BUY-Trades für ${symbol}:`, buyError);
-        continue;
-      }
-      
-      // Skip wenn keine BUY-Trades vorhanden
-      if (!buyTrades || buyTrades.length === 0) {
-        console.log(`📊 ${symbol}: Keine BUY-Trades vorhanden`);
-        continue;
-      }
-      
-      // Lade alle SELL-Trades chronologisch sortiert
-      const { data: sellTrades, error: sellError } = await supabase
-        .from('trades')
-        .select('*')
-        .eq('strategy_id', strategy.id)
-        .eq('symbol', symbol)
-        .eq('side', 'sell')
-        .eq('status', 'executed')
-        .order('executed_at', { ascending: true });
-      
-      if (sellError) {
-        console.error(`❌ Fehler beim Laden der SELL-Trades für ${symbol}:`, sellError);
-        continue;
-      }
-      
-      console.log(`📊 ${symbol}: ${buyTrades.length} BUY-Trades, ${sellTrades?.length || 0} SELL-Trades`);
-      
-      // FIFO-Logik: Paare BUY- und SELL-Trades
-      const openBuyTrades = [];
-      let sellIndex = 0;
-      
-        for (const buyTrade of buyTrades) {
-          let remainingQuantity = parseFloat(buyTrade.quantity);
-          
-          // Versuche, diese BUY-Position mit SELL-Trades zu schließen
-        while (remainingQuantity > 0.00000001 && sellTrades && sellIndex < sellTrades.length) {
-            const sellTrade = sellTrades[sellIndex];
-            const sellQuantity = parseFloat(sellTrade.quantity);
-            
-            if (sellQuantity >= remainingQuantity) {
-              // Dieser SELL schließt die gesamte BUY-Position
-              remainingQuantity = 0;
-              sellIndex++;
-            } else {
-              // Dieser SELL schließt nur einen Teil der BUY-Position
-              remainingQuantity -= sellQuantity;
-              sellIndex++;
-            }
-          }
-          
-        // Wenn noch etwas übrig ist (mit Toleranz für Rundungsfehler), ist die Position offen
-        if (remainingQuantity > 0.00000001) {
-            openBuyTrades.push({
-              ...buyTrade,
-              remainingQuantity: remainingQuantity
-            });
+    // Bearbeite jede Position
+    for (const position of (positions || [])) {
+      // Hole aktuellen Preis von Binance (falls verfügbar)
+      let currentPrice = position.entry_price; // Fallback
+      try {
+        if (binanceClient && position.symbol) {
+          const ticker = await binanceClient.prices({ symbol: position.symbol });
+          currentPrice = parseFloat(ticker[position.symbol]) || position.entry_price;
         }
+      } catch (error) {
+        console.warn(`⚠️  Konnte aktuellen Preis für ${position.symbol} nicht laden:`, error.message);
       }
       
-      console.log(`📊 ${symbol}: ${openBuyTrades.length} offene BUY-Trades`);
+      const quantity = parseFloat(position.quantity);
+      const entryPrice = parseFloat(position.entry_price);
+      const pnl = (currentPrice - entryPrice) * quantity;
+      const pnlPercent = entryPrice > 0 
+        ? ((currentPrice - entryPrice) / entryPrice) * 100 
+        : 0;
       
-      // Wenn es offene Positionen gibt, berechne gewichteten Durchschnittspreis
-      if (openBuyTrades.length > 0) {
-        let totalValue = 0;
-        let totalQuantity = 0;
-        
-        for (const trade of openBuyTrades) {
-          const qty = trade.remainingQuantity || parseFloat(trade.quantity);
-          const price = parseFloat(trade.price);
-          totalValue += qty * price;
-          totalQuantity += qty;
-        }
-        
-        // Mindestmenge prüfen (keine Positionen mit sehr kleinen Mengen anzeigen)
-        if (totalQuantity > 0.00000001) {
-          const weightedAveragePrice = totalValue / totalQuantity;
-          
-          // Hole aktuellen Preis von Binance (falls verfügbar)
-          let currentPrice = weightedAveragePrice; // Fallback
-          try {
-            if (binanceClient) {
-              const ticker = await binanceClient.prices({ symbol: symbol });
-              currentPrice = parseFloat(ticker[symbol]) || weightedAveragePrice;
-            }
-          } catch (error) {
-            console.warn(`⚠️  Konnte aktuellen Preis für ${symbol} nicht laden:`, error.message);
-          }
-          
-          const pnl = (currentPrice - weightedAveragePrice) * totalQuantity;
-          const pnlPercent = weightedAveragePrice > 0 
-            ? ((currentPrice - weightedAveragePrice) / weightedAveragePrice) * 100 
-            : 0;
-          
-          console.log(`✅ ${symbol}: Offene Position gefunden - Menge: ${totalQuantity.toFixed(8)}, Entry: ${weightedAveragePrice.toFixed(8)}, PnL: ${pnl.toFixed(2)} USDT`);
-          
-          allPositions.push({
-            id: `${strategy.id}_${symbol}`,
-            symbol: symbol,
-            quantity: totalQuantity,
-            entryPrice: weightedAveragePrice,
-            currentPrice: currentPrice,
-            pnl: pnl,
-            pnlPercent: pnlPercent,
-            strategyId: strategy.id,
-            strategyName: strategy.name,
-            createdAt: openBuyTrades[0].executed_at || openBuyTrades[0].created_at
-          });
-        } else {
-          console.log(`⚠️  ${symbol}: Menge zu klein (${totalQuantity.toFixed(8)}), wird nicht als offene Position angezeigt`);
-        }
-      }
+      allPositions.push({
+        id: position.id,
+        symbol: position.symbol,
+        quantity: quantity,
+        entryPrice: entryPrice,
+        currentPrice: currentPrice,
+        pnl: pnl,
+        pnlPercent: pnlPercent,
+        strategyId: position.strategy_id,
+        strategyName: position.strategies?.name || 'Unbekannt',
+        createdAt: position.opened_at
+      });
     }
 
-    console.log(`📊 Insgesamt ${allPositions.length} offene Positionen gefunden`);
+    console.log(`📊 API gibt ${allPositions.length} offene Positionen zurück`);
 
     res.json({ 
       success: true, 
@@ -753,203 +877,6 @@ async function loadBotSettings(silent = false) {
   } catch (error) {
     console.error('❌ Fehler beim Laden der Einstellungen:', error);
     return false;
-  }
-}
-
-/**
- * Lädt offene Positionen aus der Datenbank (BUY ohne entsprechenden SELL)
- * Korrigierte Logik: Paart BUY- und SELL-Trades chronologisch und berechnet verbleibende Positionen
- */
-async function loadOpenPositions() {
-  try {
-    console.log('📊 Lade offene Positionen aus der Datenbank...');
-    
-    // Für jede aktive Strategie prüfen, ob es offene Positionen gibt
-    for (const strategy of activeStrategies) {
-      const symbol = strategy.symbol;
-      
-      // Lade alle BUY-Trades chronologisch sortiert
-      const { data: buyTrades, error: buyError } = await supabase
-        .from('trades')
-        .select('*')
-        .eq('strategy_id', strategy.id)
-        .eq('symbol', symbol)
-        .eq('side', 'buy')
-        .eq('status', 'executed')
-        .order('executed_at', { ascending: true }); // Chronologisch sortiert
-      
-      if (buyError) {
-        console.error(`❌ Fehler beim Laden der BUY-Trades für ${symbol}:`, buyError);
-        continue;
-      }
-      
-      // Lade alle SELL-Trades chronologisch sortiert
-      const { data: sellTrades, error: sellError } = await supabase
-        .from('trades')
-        .select('*')
-        .eq('strategy_id', strategy.id)
-        .eq('symbol', symbol)
-        .eq('side', 'sell')
-        .eq('status', 'executed')
-        .order('executed_at', { ascending: true }); // Chronologisch sortiert
-      
-      if (sellError) {
-        console.error(`❌ Fehler beim Laden der SELL-Trades für ${symbol}:`, sellError);
-        continue;
-      }
-      
-      const buyCount = buyTrades ? buyTrades.length : 0;
-      const sellCount = sellTrades ? sellTrades.length : 0;
-      
-      console.log(`   📊 ${symbol}: ${buyCount} BUY-Trades, ${sellCount} SELL-Trades`);
-      
-      // KRITISCH: Korrigierte FIFO-Logik (First In First Out)
-      // Jeder SELL schließt den ältesten noch offenen BUY
-      // Wir müssen alle Trades chronologisch sortieren und dann paaren
-      
-      // Kombiniere alle Trades und sortiere chronologisch
-      const allTrades = [];
-      if (buyTrades) {
-        buyTrades.forEach(trade => {
-          allTrades.push({ ...trade, type: 'buy' });
-        });
-      }
-      if (sellTrades) {
-        sellTrades.forEach(trade => {
-          allTrades.push({ ...trade, type: 'sell' });
-        });
-      }
-      
-      // Sortiere alle Trades chronologisch nach executed_at
-      allTrades.sort((a, b) => new Date(a.executed_at) - new Date(b.executed_at));
-      
-      // FIFO-Logik: Jeder SELL schließt den ältesten noch offenen BUY
-      const openBuyTrades = [];
-      let totalOpenQuantity = 0;
-      let totalValue = 0;
-      
-      for (const trade of allTrades) {
-        if (trade.type === 'buy') {
-          // BUY-Trade hinzufügen
-          openBuyTrades.push(trade);
-          totalOpenQuantity += parseFloat(trade.quantity);
-          totalValue += parseFloat(trade.price) * parseFloat(trade.quantity);
-        } else if (trade.type === 'sell') {
-          // SELL-Trade: Schließt den ältesten noch offenen BUY (FIFO)
-          if (openBuyTrades.length === 0) {
-            // KEIN BUY vorhanden - das sollte nicht passieren, aber wir loggen es
-            console.warn(`⚠️  [${symbol}] SELL-Trade ohne offene BUY-Position gefunden: ${trade.order_id} @ ${trade.executed_at}`);
-            await logBotEvent('warning', `SELL ohne BUY-Position gefunden`, {
-              symbol: symbol,
-              strategy_id: strategy.id,
-              trade_id: trade.id,
-              order_id: trade.order_id,
-              executed_at: trade.executed_at
-            });
-            continue; // Überspringe diesen SELL
-          }
-          
-          // Entferne den ältesten BUY (FIFO)
-          const closedBuyTrade = openBuyTrades.shift();
-          const closedQuantity = parseFloat(closedBuyTrade.quantity);
-          const closedValue = parseFloat(closedBuyTrade.price) * closedQuantity;
-          
-          totalOpenQuantity -= closedQuantity;
-          totalValue -= closedValue;
-          
-          // Wenn der SELL mehr verkauft als der BUY gekauft hat, müssen wir weitere BUYs schließen
-          const sellQuantity = parseFloat(trade.quantity);
-          let remainingSellQuantity = sellQuantity - closedQuantity;
-          
-          while (remainingSellQuantity > 0 && openBuyTrades.length > 0) {
-            const nextBuyTrade = openBuyTrades.shift();
-            const nextBuyQuantity = parseFloat(nextBuyTrade.quantity);
-            const nextBuyValue = parseFloat(nextBuyTrade.price) * nextBuyQuantity;
-            
-            if (remainingSellQuantity >= nextBuyQuantity) {
-              // Dieser BUY wird komplett geschlossen
-              totalOpenQuantity -= nextBuyQuantity;
-              totalValue -= nextBuyValue;
-              remainingSellQuantity -= nextBuyQuantity;
-            } else {
-              // Nur teilweise geschlossen - wir müssen die Position anpassen
-              // Für Einfachheit: Wir nehmen den ganzen BUY und passen die Menge an
-              totalOpenQuantity -= remainingSellQuantity;
-              totalValue -= (parseFloat(nextBuyTrade.price) * remainingSellQuantity);
-              
-              // Füge den verbleibenden Teil wieder hinzu
-              const remainingBuyQuantity = nextBuyQuantity - remainingSellQuantity;
-              openBuyTrades.unshift({
-                ...nextBuyTrade,
-                quantity: remainingBuyQuantity.toString()
-              });
-              remainingSellQuantity = 0;
-            }
-          }
-          
-          if (remainingSellQuantity > 0) {
-            // Mehr verkauft als gekauft - das sollte nicht passieren
-            console.warn(`⚠️  [${symbol}] SELL-Trade verkauft mehr als gekauft: ${trade.order_id} (Verkauft: ${sellQuantity}, Offen: ${totalOpenQuantity})`);
-          }
-        }
-      }
-      
-      // Wenn es offene Positionen gibt, speichere sie
-      if (openBuyTrades.length > 0 && totalOpenQuantity > 0) {
-        const positionKey = `${strategy.id}_${symbol}`;
-        
-        // Berechne gewichteten Durchschnittspreis
-        const weightedAveragePrice = totalValue / totalOpenQuantity;
-        
-        // Verwende den letzten BUY-Trade für Order-ID und Timestamp
-        const lastBuyTrade = openBuyTrades[openBuyTrades.length - 1];
-        
-        openPositions.set(positionKey, {
-          symbol: symbol,
-          entryPrice: weightedAveragePrice,
-          quantity: totalOpenQuantity,
-          orderId: lastBuyTrade.order_id,
-          timestamp: new Date(lastBuyTrade.executed_at),
-          buyTradeCount: openBuyTrades.length,
-          strategyId: strategy.id, // WICHTIG: Strategie-ID speichern für Validierung
-          individualTrades: openBuyTrades.map(t => ({
-            orderId: t.order_id,
-            price: parseFloat(t.price),
-            quantity: parseFloat(t.quantity),
-            executedAt: t.executed_at
-          }))
-        });
-        
-        console.log(`✅ Offene Position geladen: ${positionKey}`);
-        console.log(`   📊 Anzahl BUY-Trades: ${openBuyTrades.length}`);
-        console.log(`   💰 Gesamtmenge: ${totalOpenQuantity.toFixed(2)}`);
-        console.log(`   💵 Gewichteter Durchschnittspreis: ${weightedAveragePrice.toFixed(6)} USDT`);
-        console.log(`   📈 Gesamtwert: ${totalValue.toFixed(2)} USDT`);
-      } else {
-        console.log(`   ✅ Keine offenen Positionen für ${symbol} (Strategie: ${strategy.id})`);
-        
-        // WICHTIG: Stelle sicher, dass keine Position für diese Strategie/Symbol-Kombination existiert
-        const positionKey = `${strategy.id}_${symbol}`;
-        if (openPositions.has(positionKey)) {
-          console.log(`   🗑️  Entferne ungültige Position: ${positionKey}`);
-          openPositions.delete(positionKey);
-        }
-      }
-    }
-    
-    console.log(`✅ ${openPositions.size} offene Position(en) geladen`);
-    
-    // Zeige alle geladenen Positionen
-    if (openPositions.size > 0) {
-      console.log('📊 Geladene Positionen:');
-      openPositions.forEach((position, key) => {
-        console.log(`   ${key}: ${position.quantity.toFixed(2)} @ ${position.entryPrice.toFixed(6)} USDT`);
-      });
-    }
-    
-  } catch (error) {
-    console.error('❌ Fehler beim Laden der offenen Positionen:', error);
-    console.error('   Stack:', error.stack);
   }
 }
 
@@ -1775,15 +1702,28 @@ async function canTrade(signal, strategy) {
     return { allowed: false, reason: reason };
   }
 
-  // Bei BUY: Prüfen ob bereits eine offene Position existiert (verhindert mehrfache Käufe)
+  // Bei BUY: Prüfen ob bereits eine offene Position existiert
   if (signal.action === 'buy') {
-    const positionKey = `${strategy.id}_${symbol}`;
-    if (openPositions.has(positionKey)) {
-      const reason = `Bereits eine offene Position vorhanden: ${positionKey} - Kein weiterer Kauf möglich`;
+    // Check positions Tabelle
+    const { data: existingPosition, error: posError } = await supabase
+      .from('positions')
+      .select('*')
+      .eq('strategy_id', strategy.id)
+      .eq('symbol', symbol)
+      .eq('status', 'open')
+      .single();
+    
+    if (posError && posError.code !== 'PGRST116') { // PGRST116 = no rows returned
+      console.error(`❌ Fehler beim Prüfen der Position: ${posError.message}`);
+    }
+    
+    if (existingPosition && existingPosition.quantity > 0) {
+      const reason = `Bereits eine offene Position vorhanden: ${symbol} - ${existingPosition.quantity} @ ${existingPosition.entry_price}`;
       console.log(`⚠️  ${reason}`);
       await logBotEvent('warning', `BUY-Signal ignoriert: Bereits offene Position`, {
-        positionKey: positionKey,
         symbol: symbol,
+        quantity: existingPosition.quantity,
+        entry_price: existingPosition.entry_price,
         strategy_id: strategy.id
       });
       return { allowed: false, reason: reason };
@@ -1792,57 +1732,27 @@ async function canTrade(signal, strategy) {
 
   // Bei SELL: Prüfen ob offene Position existiert
   if (signal.action === 'sell') {
-    const positionKey = `${strategy.id}_${symbol}`;
+    // Check positions Tabelle
+    const { data: position, error: posError } = await supabase
+      .from('positions')
+      .select('*')
+      .eq('strategy_id', strategy.id)
+      .eq('symbol', symbol)
+      .eq('status', 'open')
+      .single();
     
-    // KRITISCH: Prüfe ob Position existiert UND ob sie zu dieser Strategie gehört
-    if (!openPositions.has(positionKey)) {
-      const reason = `Keine offene Position zum Verkaufen: ${positionKey}`;
-      console.log(`⚠️  KEINE OFFENE POSITION ZUM VERKAUFEN: ${positionKey}`);
+    if (posError || !position || position.quantity <= 0) {
+      const reason = `Keine offene Position zum Verkaufen: ${symbol}`;
+      console.log(`⚠️  KEINE OFFENE POSITION ZUM VERKAUFEN: ${symbol}`);
       console.log(`   Strategie: ${strategy.name} (ID: ${strategy.id})`);
-      console.log(`   Symbol: ${symbol}`);
-      console.log(`   Aktuelle offene Positionen: ${Array.from(openPositions.keys()).join(', ') || 'Keine'}`);
-      
-      // Zeige alle offenen Positionen für Debugging
-      if (openPositions.size > 0) {
-        console.log(`   📊 Details der offenen Positionen:`);
-        openPositions.forEach((pos, key) => {
-          console.log(`      ${key}: ${pos.quantity.toFixed(2)} @ ${pos.entryPrice.toFixed(6)} USDT (Strategie-ID: ${pos.strategyId || 'N/A'})`);
-        });
-      }
       
       await logBotEvent('warning', `SELL-Signal ignoriert: Keine offene Position`, {
-        positionKey: positionKey,
-        openPositions: Array.from(openPositions.keys()),
         symbol: symbol,
         strategy_id: strategy.id,
         strategy_name: strategy.name
       });
       return { allowed: false, reason: reason };
     }
-    
-    // Zusätzliche Validierung: Stelle sicher, dass die Position zu dieser Strategie gehört
-    const position = openPositions.get(positionKey);
-    if (position.strategyId && position.strategyId !== strategy.id) {
-      const reason = `Position gehört zu einer anderen Strategie: ${positionKey} (Position-Strategie: ${position.strategyId}, Aktuelle Strategie: ${strategy.id})`;
-      console.error(`❌ ${reason}`);
-      await logBotEvent('error', `SELL-Signal abgelehnt: Position gehört zu anderer Strategie`, {
-        positionKey: positionKey,
-        positionStrategyId: position.strategyId,
-        currentStrategyId: strategy.id,
-        symbol: symbol
-      });
-      return { allowed: false, reason: reason };
-    }
-    
-    // KRITISCH: Position SOFORT entfernen, um Race-Conditions zu vermeiden!
-    // Wenn mehrere SELL-Signale gleichzeitig kommen, wird nur der erste ausgeführt
-    openPositions.delete(positionKey); // SOFORT löschen, bevor Trade ausgeführt wird
-    console.log(`📊 Position reserviert für SELL: ${positionKey} @ ${position.entryPrice.toFixed(6)} USDT`);
-    console.log(`   Menge: ${position.quantity.toFixed(2)}`);
-    console.log(`   Entry Price: ${position.entryPrice.toFixed(6)} USDT`);
-    
-    // Position-Daten an Signal anhängen, damit sie später verwendet werden können
-    signal._positionData = position;
   }
 
   return { allowed: true, reason: 'OK' };
@@ -1912,69 +1822,105 @@ async function executeTrade(signal, strategy) {
     console.log('═══════════════════════════════════════════════');
     console.log('');
 
-    // Position tracking
+    // Position tracking mit neuer DB-basierter Lösung
     const positionKey = `${strategy.id}_${symbol}`;
     if (side === 'BUY') {
-      // Prüfe ob bereits eine Position existiert (sollte nicht passieren, aber sicherheitshalber)
-      if (openPositions.has(positionKey)) {
-        console.warn(`⚠️  Position ${positionKey} existiert bereits - überschreibe mit neuer Position`);
-        await logBotEvent('warning', `Position überschrieben bei BUY`, {
+      // Neue Position öffnen oder erweitern (Average Down/Up)
+      try {
+        await openOrUpdatePosition(strategy.id, symbol, executedQty, avgPrice);
+        
+        // Update In-Memory Map für schnellen Zugriff
+        const existingPos = openPositions.get(positionKey);
+        if (existingPos) {
+          // Position erweitert - berechne neuen Durchschnittspreis
+          const newTotalValue = (existingPos.quantity * existingPos.entryPrice) + (executedQty * avgPrice);
+          const newTotalQuantity = existingPos.quantity + executedQty;
+          const newAvgPrice = newTotalValue / newTotalQuantity;
+          
+          openPositions.set(positionKey, {
+            symbol: symbol,
+            entryPrice: newAvgPrice,
+            quantity: newTotalQuantity,
+            orderId: order.orderId,
+            timestamp: new Date(),
+            strategyId: strategy.id
+          });
+        } else {
+          // Neue Position
+          openPositions.set(positionKey, {
+            symbol: symbol,
+            entryPrice: avgPrice,
+            quantity: executedQty,
+            orderId: order.orderId,
+            timestamp: new Date(),
+            strategyId: strategy.id
+          });
+        }
+        
+        await logBotEvent('info', `Position geöffnet/erweitert: ${symbol}`, {
+          positionKey: positionKey,
+          entryPrice: avgPrice,
+          quantity: executedQty,
+          orderId: order.orderId.toString(),
+          strategy_id: strategy.id,
+          strategy_name: strategy.name
+        });
+      } catch (error) {
+        console.error(`❌ Fehler beim Öffnen/Erweitern der Position: ${error.message}`);
+        await logBotEvent('error', `Fehler beim Position-Update`, {
+          error: error.message,
           positionKey: positionKey,
           symbol: symbol,
           strategy_id: strategy.id
         });
       }
-      
-      openPositions.set(positionKey, {
-        symbol: symbol,
-        entryPrice: avgPrice, // Verwende tatsächlichen Durchschnittspreis statt signal.price
-        quantity: quantity,
-        orderId: order.orderId,
-        timestamp: new Date(),
-        strategyId: strategy.id // WICHTIG: Strategie-ID speichern für Validierung
-      });
-      console.log(`📊 Position geöffnet: ${positionKey} @ ${avgPrice.toFixed(6)} USDT`);
-      console.log(`   Menge: ${quantity.toFixed(2)}`);
-      console.log(`   Strategie: ${strategy.name} (ID: ${strategy.id})`);
-      await logBotEvent('info', `Position geöffnet: ${symbol}`, {
-        positionKey: positionKey,
-        entryPrice: avgPrice,
-        quantity: quantity,
-        orderId: order.orderId.toString(),
-        strategy_id: strategy.id,
-        strategy_name: strategy.name
-      });
     } else {
-      // Bei SELL: Position wurde bereits in canTrade() gelöscht (Race-Condition-Schutz)
-      // Verwende die Position-Daten aus dem Signal
-      const closedPosition = signal._positionData;
-      if (closedPosition) {
-        // Zusätzliche Validierung: Stelle sicher, dass die Position wirklich geschlossen wurde
-        if (openPositions.has(positionKey)) {
-          console.error(`❌ KRITISCHER FEHLER: Position ${positionKey} existiert noch nach SELL!`);
-          await logBotEvent('error', `Position existiert noch nach SELL`, {
+      // SELL - Position reduzieren oder schließen
+      try {
+        const result = await reduceOrClosePosition(strategy.id, symbol, executedQty);
+        
+        if (result.action === 'no_position') {
+          console.error(`❌ WARNUNG: SELL ohne offene Position für ${symbol}`);
+          await logBotEvent('warning', `SELL ohne offene Position`, {
             positionKey: positionKey,
             symbol: symbol,
             strategy_id: strategy.id
           });
-          // Entferne die Position jetzt (sollte nicht passieren)
-          openPositions.delete(positionKey);
+        } else {
+          const entryPrice = result.entry_price;
+          
+          // Speichere entry_price im Signal für PnL-Berechnung in saveTradeToDatabase
+          signal._entryPrice = entryPrice;
+          
+          console.log(`📊 Position ${result.action === 'closed' ? 'geschlossen' : 'reduziert'}: ${positionKey}`);
+          console.log(`   Entry: ${entryPrice} USDT, Exit: ${avgPrice.toFixed(6)} USDT`);
+          console.log(`   Menge: ${executedQty.toFixed(2)}`);
+          
+          await logBotEvent('info', `Position ${result.action === 'closed' ? 'geschlossen' : 'reduziert'}: ${symbol}`, {
+            positionKey: positionKey,
+            action: result.action,
+            entryPrice: entryPrice,
+            exitPrice: avgPrice,
+            quantity: executedQty,
+            remaining_quantity: result.remaining_quantity,
+            strategy_id: strategy.id,
+            strategy_name: strategy.name
+          });
+          
+          // Update In-Memory Map
+          if (result.action === 'closed') {
+            openPositions.delete(positionKey);
+          } else if (result.remaining_quantity > 0) {
+            const memPos = openPositions.get(positionKey);
+            if (memPos) {
+              memPos.quantity = result.remaining_quantity;
+            }
+          }
         }
-        
-        console.log(`📊 Position geschlossen: ${positionKey} (Entry: ${closedPosition.entryPrice.toFixed(6)} USDT, Exit: ${avgPrice.toFixed(6)} USDT)`);
-        console.log(`   Menge: ${executedQty.toFixed(2)}`);
-        console.log(`   Strategie: ${strategy.name} (ID: ${strategy.id})`);
-        await logBotEvent('info', `Position geschlossen: ${symbol}`, {
-          positionKey: positionKey,
-          entryPrice: closedPosition.entryPrice,
-          exitPrice: avgPrice,
-          quantity: executedQty,
-          strategy_id: strategy.id,
-          strategy_name: strategy.name
-        });
-      } else {
-        console.error(`❌ KRITISCHER FEHLER: Keine Position-Daten für SELL gefunden: ${positionKey}`);
-        await logBotEvent('error', `Keine Position-Daten für SELL`, {
+      } catch (error) {
+        console.error(`❌ Fehler beim Reduzieren/Schließen der Position: ${error.message}`);
+        await logBotEvent('error', `Fehler beim Position-Close`, {
+          error: error.message,
           positionKey: positionKey,
           symbol: symbol,
           strategy_id: strategy.id
@@ -2043,13 +1989,14 @@ async function saveTradeToDatabase(order, signal, strategy) {
     let pnl = null;
     let pnlPercent = null;
     if (signal.action === 'sell') {
-      // Verwende Position-Daten aus Signal (wurde in canTrade() gespeichert)
-      const position = signal._positionData;
-      if (position) {
-        pnl = (avgPrice - position.entryPrice) * executedQty;
-        pnlPercent = ((avgPrice - position.entryPrice) / position.entryPrice) * 100;
+      // Verwende die entry_price die im Signal gespeichert wurde (aus der DB)
+      const entryPrice = signal._entryPrice;
+      if (entryPrice && entryPrice > 0) {
+        pnl = (avgPrice - entryPrice) * executedQty;
+        pnlPercent = ((avgPrice - entryPrice) / entryPrice) * 100;
+        console.log(`💰 PnL berechnet: ${pnl.toFixed(2)} USDT (${pnlPercent.toFixed(2)}%)`);
       } else {
-        console.log(`⚠️  Keine Position-Daten für PnL-Berechnung gefunden`);
+        console.log(`⚠️  Keine Entry-Price für PnL-Berechnung gefunden`);
       }
     }
 
@@ -2732,7 +2679,7 @@ async function startTradingBot() {
   }
   
   // WICHTIG: Offene Positionen aus der Datenbank laden (nach Neustart)
-  await loadOpenPositions();
+  await loadOpenPositionsFromDB();
 
   // NEU: Eindeutige Symbole ermitteln
   const uniqueSymbols = [...new Set(activeStrategies.map(s => s.symbol))];
