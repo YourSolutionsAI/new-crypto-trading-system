@@ -884,6 +884,8 @@ app.get('/api/positions', async (req, res) => {
         ? ((currentPrice - entryPrice) / entryPrice) * 100 
         : 0;
       
+      const strategyName = position.strategies?.name || 'Unbekannt';
+      
       allPositions.push({
         id: position.id,
         symbol: position.symbol,
@@ -893,9 +895,11 @@ app.get('/api/positions', async (req, res) => {
         pnl: pnl,
         pnlPercent: pnlPercent,
         strategyId: position.strategy_id,
-        strategyName: position.strategies?.name || 'Unbekannt',
+        strategyName: strategyName,
         createdAt: position.opened_at
       });
+      
+      console.log(`📍 Position #${position.id} gefunden: ${position.symbol} | Strategie: ${strategyName} | Menge: ${quantity} | Entry: ${entryPrice} | Aktuell: ${currentPrice.toFixed(8)}`);
     }
 
     console.log(`📊 API gibt ${allPositions.length} offene Positionen zurück`);
