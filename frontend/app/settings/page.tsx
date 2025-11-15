@@ -10,6 +10,7 @@ export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [editedSettings, setEditedSettings] = useState<BotSettings>({});
+  const [inputValues, setInputValues] = useState<Record<string, string>>({});
 
   useEffect(() => {
     loadSettings();
@@ -20,6 +21,21 @@ export default function SettingsPage() {
       const data = await getBotSettings();
       setSettings(data);
       setEditedSettings(data);
+      // Initialisiere Input-Werte mit formatierten Zahlen
+      const initialInputValues: Record<string, string> = {};
+      Object.keys(data).forEach(key => {
+        const value = data[key];
+        if (typeof value === 'number') {
+          if (key.includes('percent') || key.includes('threshold')) {
+            initialInputValues[key] = formatNumber(value, 2);
+          } else if (key.includes('usdt') || key.includes('size')) {
+            initialInputValues[key] = formatNumber(value, 2);
+          } else {
+            initialInputValues[key] = formatNumber(value, 0);
+          }
+        }
+      });
+      setInputValues(initialInputValues);
     } catch (error) {
       console.error('Fehler beim Laden der Einstellungen:', error);
       alert('Fehler beim Laden der Einstellungen');
@@ -44,6 +60,21 @@ export default function SettingsPage() {
 
   const handleReset = () => {
     setEditedSettings(settings);
+    // Setze Input-Werte zurück
+    const resetInputValues: Record<string, string> = {};
+    Object.keys(settings).forEach(key => {
+      const value = settings[key];
+      if (typeof value === 'number') {
+        if (key.includes('percent') || key.includes('threshold')) {
+          resetInputValues[key] = formatNumber(value, 2);
+        } else if (key.includes('usdt') || key.includes('size')) {
+          resetInputValues[key] = formatNumber(value, 2);
+        } else {
+          resetInputValues[key] = formatNumber(value, 0);
+        }
+      }
+    });
+    setInputValues(resetInputValues);
   };
 
   const updateSetting = (key: string, value: any) => {
@@ -87,10 +118,16 @@ export default function SettingsPage() {
                   </label>
                   <input
                     type="text"
-                    value={getSettingValue('max_total_exposure_usdt') ? formatNumber(getSettingValue('max_total_exposure_usdt'), 2) : ''}
+                    value={inputValues.max_total_exposure_usdt ?? (getSettingValue('max_total_exposure_usdt') ? formatNumber(getSettingValue('max_total_exposure_usdt'), 2) : '')}
                     onChange={(e) => {
+                      setInputValues({ ...inputValues, max_total_exposure_usdt: e.target.value });
+                    }}
+                    onBlur={(e) => {
                       const parsed = parseFormattedNumber(e.target.value);
                       updateSetting('max_total_exposure_usdt', parsed || 0);
+                      if (parsed !== undefined) {
+                        setInputValues({ ...inputValues, max_total_exposure_usdt: formatNumber(parsed, 2) });
+                      }
                     }}
                     placeholder="0,00"
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
@@ -103,10 +140,17 @@ export default function SettingsPage() {
                   </label>
                   <input
                     type="text"
-                    value={getSettingValue('max_concurrent_trades') ? formatNumber(getSettingValue('max_concurrent_trades'), 0) : ''}
+                    value={inputValues.max_concurrent_trades ?? (getSettingValue('max_concurrent_trades') ? formatNumber(getSettingValue('max_concurrent_trades'), 0) : '')}
                     onChange={(e) => {
+                      setInputValues({ ...inputValues, max_concurrent_trades: e.target.value });
+                    }}
+                    onBlur={(e) => {
                       const parsed = parseFormattedNumber(e.target.value);
-                      updateSetting('max_concurrent_trades', parsed ? Math.floor(parsed) : 0);
+                      const value = parsed ? Math.floor(parsed) : 0;
+                      updateSetting('max_concurrent_trades', value);
+                      if (value !== undefined) {
+                        setInputValues({ ...inputValues, max_concurrent_trades: formatNumber(value, 0) });
+                      }
                     }}
                     placeholder="0"
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
@@ -119,10 +163,16 @@ export default function SettingsPage() {
                   </label>
                   <input
                     type="text"
-                    value={getSettingValue('default_trade_size_usdt') ? formatNumber(getSettingValue('default_trade_size_usdt'), 2) : ''}
+                    value={inputValues.default_trade_size_usdt ?? (getSettingValue('default_trade_size_usdt') ? formatNumber(getSettingValue('default_trade_size_usdt'), 2) : '')}
                     onChange={(e) => {
+                      setInputValues({ ...inputValues, default_trade_size_usdt: e.target.value });
+                    }}
+                    onBlur={(e) => {
                       const parsed = parseFormattedNumber(e.target.value);
                       updateSetting('default_trade_size_usdt', parsed || 0);
+                      if (parsed !== undefined) {
+                        setInputValues({ ...inputValues, default_trade_size_usdt: formatNumber(parsed, 2) });
+                      }
                     }}
                     placeholder="0,00"
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
@@ -135,10 +185,16 @@ export default function SettingsPage() {
                   </label>
                   <input
                     type="text"
-                    value={getSettingValue('signal_threshold_percent') ? formatNumber(getSettingValue('signal_threshold_percent'), 3) : ''}
+                    value={inputValues.signal_threshold_percent ?? (getSettingValue('signal_threshold_percent') ? formatNumber(getSettingValue('signal_threshold_percent'), 3) : '')}
                     onChange={(e) => {
+                      setInputValues({ ...inputValues, signal_threshold_percent: e.target.value });
+                    }}
+                    onBlur={(e) => {
                       const parsed = parseFormattedNumber(e.target.value);
                       updateSetting('signal_threshold_percent', parsed || 0);
+                      if (parsed !== undefined) {
+                        setInputValues({ ...inputValues, signal_threshold_percent: formatNumber(parsed, 3) });
+                      }
                     }}
                     placeholder="0,000"
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
@@ -158,10 +214,17 @@ export default function SettingsPage() {
                   </label>
                   <input
                     type="text"
-                    value={getSettingValue('default_indicators_ma_short') ? formatNumber(getSettingValue('default_indicators_ma_short'), 0) : ''}
+                    value={inputValues.default_indicators_ma_short ?? (getSettingValue('default_indicators_ma_short') ? formatNumber(getSettingValue('default_indicators_ma_short'), 0) : '')}
                     onChange={(e) => {
+                      setInputValues({ ...inputValues, default_indicators_ma_short: e.target.value });
+                    }}
+                    onBlur={(e) => {
                       const parsed = parseFormattedNumber(e.target.value);
-                      updateSetting('default_indicators_ma_short', parsed ? Math.floor(parsed) : 0);
+                      const value = parsed ? Math.floor(parsed) : 0;
+                      updateSetting('default_indicators_ma_short', value);
+                      if (value !== undefined) {
+                        setInputValues({ ...inputValues, default_indicators_ma_short: formatNumber(value, 0) });
+                      }
                     }}
                     placeholder="0"
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
@@ -173,10 +236,17 @@ export default function SettingsPage() {
                   </label>
                   <input
                     type="text"
-                    value={getSettingValue('default_indicators_ma_long') ? formatNumber(getSettingValue('default_indicators_ma_long'), 0) : ''}
+                    value={inputValues.default_indicators_ma_long ?? (getSettingValue('default_indicators_ma_long') ? formatNumber(getSettingValue('default_indicators_ma_long'), 0) : '')}
                     onChange={(e) => {
+                      setInputValues({ ...inputValues, default_indicators_ma_long: e.target.value });
+                    }}
+                    onBlur={(e) => {
                       const parsed = parseFormattedNumber(e.target.value);
-                      updateSetting('default_indicators_ma_long', parsed ? Math.floor(parsed) : 0);
+                      const value = parsed ? Math.floor(parsed) : 0;
+                      updateSetting('default_indicators_ma_long', value);
+                      if (value !== undefined) {
+                        setInputValues({ ...inputValues, default_indicators_ma_long: formatNumber(value, 0) });
+                      }
                     }}
                     placeholder="0"
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
@@ -188,10 +258,17 @@ export default function SettingsPage() {
                   </label>
                   <input
                     type="text"
-                    value={getSettingValue('default_indicators_rsi_period') ? formatNumber(getSettingValue('default_indicators_rsi_period'), 0) : ''}
+                    value={inputValues.default_indicators_rsi_period ?? (getSettingValue('default_indicators_rsi_period') ? formatNumber(getSettingValue('default_indicators_rsi_period'), 0) : '')}
                     onChange={(e) => {
+                      setInputValues({ ...inputValues, default_indicators_rsi_period: e.target.value });
+                    }}
+                    onBlur={(e) => {
                       const parsed = parseFormattedNumber(e.target.value);
-                      updateSetting('default_indicators_rsi_period', parsed ? Math.floor(parsed) : 0);
+                      const value = parsed ? Math.floor(parsed) : 0;
+                      updateSetting('default_indicators_rsi_period', value);
+                      if (value !== undefined) {
+                        setInputValues({ ...inputValues, default_indicators_rsi_period: formatNumber(value, 0) });
+                      }
                     }}
                     placeholder="0"
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
@@ -203,10 +280,17 @@ export default function SettingsPage() {
                   </label>
                   <input
                     type="text"
-                    value={getSettingValue('default_indicators_rsi_overbought') ? formatNumber(getSettingValue('default_indicators_rsi_overbought'), 0) : ''}
+                    value={inputValues.default_indicators_rsi_overbought ?? (getSettingValue('default_indicators_rsi_overbought') ? formatNumber(getSettingValue('default_indicators_rsi_overbought'), 0) : '')}
                     onChange={(e) => {
+                      setInputValues({ ...inputValues, default_indicators_rsi_overbought: e.target.value });
+                    }}
+                    onBlur={(e) => {
                       const parsed = parseFormattedNumber(e.target.value);
-                      updateSetting('default_indicators_rsi_overbought', parsed ? Math.floor(parsed) : 0);
+                      const value = parsed ? Math.floor(parsed) : 0;
+                      updateSetting('default_indicators_rsi_overbought', value);
+                      if (value !== undefined) {
+                        setInputValues({ ...inputValues, default_indicators_rsi_overbought: formatNumber(value, 0) });
+                      }
                     }}
                     placeholder="0"
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
@@ -218,10 +302,17 @@ export default function SettingsPage() {
                   </label>
                   <input
                     type="text"
-                    value={getSettingValue('default_indicators_rsi_oversold') ? formatNumber(getSettingValue('default_indicators_rsi_oversold'), 0) : ''}
+                    value={inputValues.default_indicators_rsi_oversold ?? (getSettingValue('default_indicators_rsi_oversold') ? formatNumber(getSettingValue('default_indicators_rsi_oversold'), 0) : '')}
                     onChange={(e) => {
+                      setInputValues({ ...inputValues, default_indicators_rsi_oversold: e.target.value });
+                    }}
+                    onBlur={(e) => {
                       const parsed = parseFormattedNumber(e.target.value);
-                      updateSetting('default_indicators_rsi_oversold', parsed ? Math.floor(parsed) : 0);
+                      const value = parsed ? Math.floor(parsed) : 0;
+                      updateSetting('default_indicators_rsi_oversold', value);
+                      if (value !== undefined) {
+                        setInputValues({ ...inputValues, default_indicators_rsi_oversold: formatNumber(value, 0) });
+                      }
                     }}
                     placeholder="0"
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
@@ -233,10 +324,17 @@ export default function SettingsPage() {
                   </label>
                   <input
                     type="text"
-                    value={getSettingValue('max_price_history') ? formatNumber(getSettingValue('max_price_history'), 0) : ''}
+                    value={inputValues.max_price_history ?? (getSettingValue('max_price_history') ? formatNumber(getSettingValue('max_price_history'), 0) : '')}
                     onChange={(e) => {
+                      setInputValues({ ...inputValues, max_price_history: e.target.value });
+                    }}
+                    onBlur={(e) => {
                       const parsed = parseFormattedNumber(e.target.value);
-                      updateSetting('max_price_history', parsed ? Math.floor(parsed) : 0);
+                      const value = parsed ? Math.floor(parsed) : 0;
+                      updateSetting('max_price_history', value);
+                      if (value !== undefined) {
+                        setInputValues({ ...inputValues, max_price_history: formatNumber(value, 0) });
+                      }
                     }}
                     placeholder="0"
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
@@ -256,10 +354,17 @@ export default function SettingsPage() {
                   </label>
                   <input
                     type="text"
-                    value={getSettingValue('logging_price_log_interval') ? formatNumber(getSettingValue('logging_price_log_interval'), 0) : ''}
+                    value={inputValues.logging_price_log_interval ?? (getSettingValue('logging_price_log_interval') ? formatNumber(getSettingValue('logging_price_log_interval'), 0) : '')}
                     onChange={(e) => {
+                      setInputValues({ ...inputValues, logging_price_log_interval: e.target.value });
+                    }}
+                    onBlur={(e) => {
                       const parsed = parseFormattedNumber(e.target.value);
-                      updateSetting('logging_price_log_interval', parsed ? Math.floor(parsed) : 0);
+                      const value = parsed ? Math.floor(parsed) : 0;
+                      updateSetting('logging_price_log_interval', value);
+                      if (value !== undefined) {
+                        setInputValues({ ...inputValues, logging_price_log_interval: formatNumber(value, 0) });
+                      }
                     }}
                     placeholder="0"
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
@@ -272,10 +377,17 @@ export default function SettingsPage() {
                   </label>
                   <input
                     type="text"
-                    value={getSettingValue('logging_hold_log_interval') ? formatNumber(getSettingValue('logging_hold_log_interval'), 0) : ''}
+                    value={inputValues.logging_hold_log_interval ?? (getSettingValue('logging_hold_log_interval') ? formatNumber(getSettingValue('logging_hold_log_interval'), 0) : '')}
                     onChange={(e) => {
+                      setInputValues({ ...inputValues, logging_hold_log_interval: e.target.value });
+                    }}
+                    onBlur={(e) => {
                       const parsed = parseFormattedNumber(e.target.value);
-                      updateSetting('logging_hold_log_interval', parsed ? Math.floor(parsed) : 0);
+                      const value = parsed ? Math.floor(parsed) : 0;
+                      updateSetting('logging_hold_log_interval', value);
+                      if (value !== undefined) {
+                        setInputValues({ ...inputValues, logging_hold_log_interval: formatNumber(value, 0) });
+                      }
                     }}
                     placeholder="0"
                     className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"

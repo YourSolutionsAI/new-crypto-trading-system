@@ -13,6 +13,7 @@ export default function StrategiesPage() {
     ma_short?: number;
     ma_long?: number;
   }>({});
+  const [inputValues, setInputValues] = useState<Record<string, string>>({});
 
   useEffect(() => {
     loadStrategies();
@@ -31,9 +32,15 @@ export default function StrategiesPage() {
 
   const handleStartEdit = (strategy: Strategy) => {
     setEditingId(strategy.id);
-    setEditForm({
+    const formData = {
       ma_short: strategy.config?.indicators?.ma_short,
       ma_long: strategy.config?.indicators?.ma_long,
+    };
+    setEditForm(formData);
+    // Initialisiere Input-Werte mit formatierten Zahlen
+    setInputValues({
+      ma_short: formData.ma_short !== undefined ? formatNumber(formData.ma_short, 0) : '',
+      ma_long: formData.ma_long !== undefined ? formatNumber(formData.ma_long, 0) : '',
     });
   };
 
@@ -58,6 +65,7 @@ export default function StrategiesPage() {
   const handleCancelEdit = () => {
     setEditingId(null);
     setEditForm({});
+    setInputValues({});
   };
 
   if (loading) {
@@ -103,13 +111,20 @@ export default function StrategiesPage() {
                           </label>
                           <input
                             type="text"
-                            value={editForm.ma_short !== undefined ? formatNumber(editForm.ma_short, 0) : ''}
+                            value={inputValues.ma_short ?? (editForm.ma_short !== undefined ? formatNumber(editForm.ma_short, 0) : '')}
                             onChange={(e) => {
+                              setInputValues({ ...inputValues, ma_short: e.target.value });
+                            }}
+                            onBlur={(e) => {
                               const parsed = parseFormattedNumber(e.target.value);
+                              const value = parsed ? Math.floor(parsed) : undefined;
                               setEditForm({
                                 ...editForm,
-                                ma_short: parsed ? Math.floor(parsed) : undefined,
+                                ma_short: value,
                               });
+                              if (value !== undefined) {
+                                setInputValues({ ...inputValues, ma_short: formatNumber(value, 0) });
+                              }
                             }}
                             placeholder="0"
                             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
@@ -121,13 +136,20 @@ export default function StrategiesPage() {
                           </label>
                           <input
                             type="text"
-                            value={editForm.ma_long !== undefined ? formatNumber(editForm.ma_long, 0) : ''}
+                            value={inputValues.ma_long ?? (editForm.ma_long !== undefined ? formatNumber(editForm.ma_long, 0) : '')}
                             onChange={(e) => {
+                              setInputValues({ ...inputValues, ma_long: e.target.value });
+                            }}
+                            onBlur={(e) => {
                               const parsed = parseFormattedNumber(e.target.value);
+                              const value = parsed ? Math.floor(parsed) : undefined;
                               setEditForm({
                                 ...editForm,
-                                ma_long: parsed ? Math.floor(parsed) : undefined,
+                                ma_long: value,
                               });
+                              if (value !== undefined) {
+                                setInputValues({ ...inputValues, ma_long: formatNumber(value, 0) });
+                              }
                             }}
                             placeholder="0"
                             className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
