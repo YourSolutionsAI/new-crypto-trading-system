@@ -506,13 +506,31 @@ async function syncPositionWithBinance(strategyId, symbol) {
     // DEBUG: Zeige rohe Werte von Binance Balance
     console.log('🔍 DEBUG: Rohe Werte von Binance Account Info:');
     console.log(`   Gesuchtes Asset: ${baseAsset}`);
+    console.log(`   Symbol: ${symbol}`);
+    console.log(`   Alle verfügbaren Balances (erste 10):`);
+    accountInfo.balances.slice(0, 10).forEach(b => {
+      const free = parseFloat(b.free);
+      const locked = parseFloat(b.locked);
+      const total = free + locked;
+      if (total > 0) {
+        console.log(`     ${b.asset}: Free=${b.free}, Locked=${b.locked}, Total=${total}`);
+      }
+    });
+    
     if (balance) {
+      console.log(`   ✅ Balance gefunden für ${baseAsset}:`);
       console.log(`   balance.free (RAW): "${balance.free}" (Typ: ${typeof balance.free})`);
       console.log(`   balance.locked (RAW): "${balance.locked}" (Typ: ${typeof balance.locked})`);
       console.log(`   balance.asset: "${balance.asset}"`);
     } else {
       console.log(`   ⚠️  Kein Balance-Eintrag für ${baseAsset} gefunden!`);
-      console.log(`   Verfügbare Assets: ${accountInfo.balances.map(b => b.asset).join(', ')}`);
+      console.log(`   Verfügbare Assets mit Balance > 0:`);
+      accountInfo.balances.forEach(b => {
+        const total = parseFloat(b.free) + parseFloat(b.locked);
+        if (total > 0) {
+          console.log(`     - ${b.asset}: ${total}`);
+        }
+      });
     }
     
     const actualBalance = balance ? parseFloat(balance.free) + parseFloat(balance.locked) : 0;
@@ -602,6 +620,23 @@ async function syncPositionWithBinance(strategyId, symbol) {
         reason: `Guthaben bei Binance zu klein: ${actualBalance} < ${minTradeableQuantity}`,
         binanceBalance: actualBalance,
         dbQuantity: dbQuantity
+      };
+    }
+    
+    // KRITISCH: Prüfe auf unplausible Werte (z.B. wenn Binance falsche Balance zurückgibt)
+    // Wenn die Binance-Balance mehr als 10x größer ist als die DB-Quantity, ist das verdächtig
+    const suspiciousRatio = actualBalance / dbQuantity;
+    if (suspiciousRatio > 10) {
+      console.error(`⚠️  VERDÄCHTIG: Binance Balance (${actualBalance}) ist ${suspiciousRatio.toFixed(2)}x größer als DB-Quantity (${dbQuantity})`);
+      console.error(`   Dies deutet auf einen Fehler hin - überspringe Synchronisation!`);
+      console.error(`   Bitte manuell prüfen: Ist die Binance Balance wirklich ${actualBalance} ${baseAsset}?`);
+      return { 
+        synced: false, 
+        action: 'skipped', 
+        reason: `Unplausible Binance Balance: ${actualBalance} (${suspiciousRatio.toFixed(2)}x größer als DB: ${dbQuantity})`,
+        binanceBalance: actualBalance,
+        dbQuantity: dbQuantity,
+        suspiciousRatio: suspiciousRatio
       };
     }
     
@@ -2976,21 +3011,52 @@ function calculateQuantity(price, symbol, strategy) {
  * Berechnet das Gesamt-Exposure über alle offenen Positionen
  * @returns {number} Gesamt-Exposure in USDT
  */
-function calculateTotalExposure() {
-  let total = 0;
-  openPositions.forEach((position) => {
-    total += position.entryPrice * position.quantity;
-  });
-  return total;
+async function calculateTotalExposure() {
+  // Lese aus DB statt aus In-Memory Map, da die Map falsche Werte enthalten kann
+  try {
+    const { data: positions, error } = await supabase
+      .from('positions')
+      .select('quantity, entry_price')
+      .eq('status', 'open')
+      .gt('quantity', 0);
+    
+    if (error) {
+      console.error('❌ Fehler beim Laden der Positionen für Exposure-Berechnung:', error);
+      // Fallback auf In-Memory Map
+      let total = 0;
+      openPositions.forEach((position) => {
+        total += position.entryPrice * position.quantity;
+      });
+      return total;
+    }
+    
+    let total = 0;
+    for (const position of (positions || [])) {
+      const quantity = parseFloat(position.quantity);
+      const entryPrice = parseFloat(position.entry_price);
+      total += entryPrice * quantity;
+    }
+    
+    return total;
+  } catch (error) {
+    console.error('❌ Fehler bei Exposure-Berechnung:', error);
+    // Fallback auf In-Memory Map
+    let total = 0;
+    openPositions.forEach((position) => {
+      total += position.entryPrice * position.quantity;
+    });
+    return total;
+  }
 }
 
 /**
  * Prüft ob Trading erlaubt ist
  * @param {Object} signal - Das Trading-Signal
  * @param {Object} strategy - Die Trading-Strategie
+ * @param {number} [preCalculatedQuantity] - Optional: Bereits berechnete Menge (für SELL)
  * @returns {Object} { allowed: boolean, reason: string }
  */
-async function canTrade(signal, strategy) {
+async function canTrade(signal, strategy, preCalculatedQuantity) {
   const symbol = strategy.symbol; // WICHTIG: Symbol aus Strategie, nicht global!
   
   // Trading Master-Switch prüfen
@@ -3026,7 +3092,7 @@ async function canTrade(signal, strategy) {
       }
       
       const availableUSDT = parseFloat(usdtBalance.free);
-      const quantity = calculateQuantity(signal.price, symbol, strategy);
+      const quantity = preCalculatedQuantity || calculateQuantity(signal.price, symbol, strategy);
       
       if (!quantity || quantity <= 0) {
         const reason = 'Fehler bei der Mengenberechnung';
@@ -3090,7 +3156,7 @@ async function canTrade(signal, strategy) {
   }
 
   // NEU: Gesamt-Exposure prüfen
-  const totalExposure = calculateTotalExposure();
+  const totalExposure = await calculateTotalExposure();
   const maxTotalExposure = botSettings.max_total_exposure_usdt;
   if (maxTotalExposure === undefined || maxTotalExposure === null) {
     console.error(`❌ FEHLER: max_total_exposure_usdt nicht in bot_settings konfiguriert!`);
@@ -3259,7 +3325,8 @@ async function executeTrade(signal, strategy) {
     }
 
     // Trading-Checks durchführen (Cooldown wurde bereits geprüft, wird aber erst nach erfolgreicher Order gesetzt)
-    const tradeCheck = await canTrade(signal, strategy);
+    // Für SELL: Menge bereits bekannt, für BUY: wird in canTrade berechnet
+    const tradeCheck = await canTrade(signal, strategy, side === 'SELL' ? quantity : undefined);
     if (!tradeCheck.allowed) {
       // Trade-Queue auflösen und freigeben
       resolveTrade();
@@ -3275,7 +3342,34 @@ async function executeTrade(signal, strategy) {
     console.log('═══════════════════════════════════════════════');
 
     const side = signal.action === 'buy' ? 'BUY' : 'SELL';
-    const quantity = calculateQuantity(signal.price, symbol, strategy);
+    
+    // Für SELL: Hole Menge aus der Position, nicht aus calculateQuantity!
+    let quantity;
+    if (side === 'SELL') {
+      // Hole Position aus DB für korrekte Menge
+      const positionKey = `${strategy.id}_${symbol}`;
+      const { data: position, error: posError } = await supabase
+        .from('positions')
+        .select('quantity')
+        .eq('strategy_id', strategy.id)
+        .eq('symbol', symbol)
+        .eq('status', 'open')
+        .gt('quantity', 0)
+        .single();
+      
+      if (posError || !position) {
+        console.error(`❌ Keine offene Position für SELL gefunden: ${symbol}`);
+        resolveTrade();
+        tradeQueues.delete(symbol);
+        return null;
+      }
+      
+      quantity = parseFloat(position.quantity);
+      console.log(`🔍 DEBUG: SELL - Menge aus Position: ${quantity} (Typ: ${typeof quantity})`);
+    } else {
+      // Für BUY: Berechne Menge wie bisher
+      quantity = calculateQuantity(signal.price, symbol, strategy);
+    }
 
     console.log(`📊 Symbol: ${symbol}`);
     console.log(`📈 Seite: ${side}`);
