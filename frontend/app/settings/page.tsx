@@ -93,7 +93,7 @@ export default function SettingsPage() {
                       updateSetting('max_total_exposure_usdt', parsed || 0);
                     }}
                     placeholder="0,00"
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">Maximales Gesamt-Exposure über alle Positionen</p>
                 </div>
@@ -109,7 +109,7 @@ export default function SettingsPage() {
                       updateSetting('max_concurrent_trades', parsed ? Math.floor(parsed) : 0);
                     }}
                     placeholder="0"
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">Maximale Anzahl gleichzeitiger Trades</p>
                 </div>
@@ -125,7 +125,7 @@ export default function SettingsPage() {
                       updateSetting('default_trade_size_usdt', parsed || 0);
                     }}
                     placeholder="0,00"
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">Standard Trade-Größe wenn nicht in Strategie definiert</p>
                 </div>
@@ -141,7 +141,7 @@ export default function SettingsPage() {
                       updateSetting('signal_threshold_percent', parsed || 0);
                     }}
                     placeholder="0,000"
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">Minimale MA-Differenz für Signale</p>
                 </div>
@@ -164,7 +164,7 @@ export default function SettingsPage() {
                       updateSetting('default_indicators_ma_short', parsed ? Math.floor(parsed) : 0);
                     }}
                     placeholder="0"
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
                   />
                 </div>
                 <div>
@@ -179,7 +179,7 @@ export default function SettingsPage() {
                       updateSetting('default_indicators_ma_long', parsed ? Math.floor(parsed) : 0);
                     }}
                     placeholder="0"
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
                   />
                 </div>
                 <div>
@@ -194,7 +194,7 @@ export default function SettingsPage() {
                       updateSetting('default_indicators_rsi_period', parsed ? Math.floor(parsed) : 0);
                     }}
                     placeholder="0"
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
                   />
                 </div>
                 <div>
@@ -209,7 +209,7 @@ export default function SettingsPage() {
                       updateSetting('default_indicators_rsi_overbought', parsed ? Math.floor(parsed) : 0);
                     }}
                     placeholder="0"
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
                   />
                 </div>
                 <div>
@@ -224,7 +224,7 @@ export default function SettingsPage() {
                       updateSetting('default_indicators_rsi_oversold', parsed ? Math.floor(parsed) : 0);
                     }}
                     placeholder="0"
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
                   />
                 </div>
                 <div>
@@ -239,7 +239,7 @@ export default function SettingsPage() {
                       updateSetting('max_price_history', parsed ? Math.floor(parsed) : 0);
                     }}
                     placeholder="0"
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">Maximale Anzahl gespeicherter Preise</p>
                 </div>
@@ -262,7 +262,7 @@ export default function SettingsPage() {
                       updateSetting('logging_price_log_interval', parsed ? Math.floor(parsed) : 0);
                     }}
                     placeholder="0"
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">Preis alle X Updates loggen</p>
                 </div>
@@ -278,7 +278,7 @@ export default function SettingsPage() {
                       updateSetting('logging_hold_log_interval', parsed ? Math.floor(parsed) : 0);
                     }}
                     placeholder="0"
-                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
+                    className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
                   />
                   <p className="mt-1 text-xs text-gray-500">Hold-Signal alle X Updates loggen</p>
                 </div>

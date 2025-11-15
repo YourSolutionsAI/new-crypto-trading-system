@@ -112,7 +112,7 @@ export default function StrategiesPage() {
                               });
                             }}
                             placeholder="0"
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
+                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
                           />
                         </div>
                         <div>
@@ -130,7 +130,7 @@ export default function StrategiesPage() {
                               });
                             }}
                             placeholder="0"
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-right px-3 py-2"
+                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
                           />
                         </div>
                       </div>
