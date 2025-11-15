@@ -183,7 +183,7 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
       if (updateError) throw updateError;
       
       const trailingInfo = useTrailingStop 
-        ? ` | Trailing Stop: ${newTrailingStopPrice.toFixed(6)} (Highest: ${newHighestPrice.toFixed(6)})`
+        ? ` | Trailing Stop: ${newTrailingStopPrice ? newTrailingStopPrice.toFixed(6) : 'N/A'} (Highest: ${newHighestPrice.toFixed(6)})`
         : '';
       console.log(`✅ Position erweitert: ${symbol} - Neue Menge: ${newTotalQuantity}, Neuer Durchschnittspreis: ${newEntryPrice}${trailingInfo}`);
       return updatedPosition;
@@ -228,7 +228,7 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
       if (insertError) throw insertError;
       
       const trailingInfo = useTrailingStop 
-        ? ` | Trailing Stop: ${initialTrailingStopPrice.toFixed(6)}`
+        ? ` | Trailing Stop: ${initialTrailingStopPrice ? initialTrailingStopPrice.toFixed(6) : 'N/A (wartet auf Aktivierung)'}`
         : '';
       console.log(`✅ Neue Position geöffnet: ${symbol} - ${quantity} @ ${price}${trailingInfo}`);
       return newPosition;
