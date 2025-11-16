@@ -404,49 +404,6 @@ export default function CoinsPage() {
           </div>
         )}
       </div>
-      
-      {/* Alerts Panel */}
-      <CoinAlertsPanel className="mb-6" autoRefresh={true} />
-
-      {/* Rate Limits Anzeige */}
-      {rateLimits && rateLimits.length > 0 && (
-        // @ts-ignore - TypeScript incorrectly infers BinanceRateLimit[] instead of RateLimit[] 
-        // The component correctly expects RateLimit[] from useRateLimits hook, but TypeScript 
-        // has a type cache issue. The types are actually correct at runtime.
-        <RateLimitsDisplay rateLimits={rateLimits} className="mb-6" />
-      )}
-
-      {/* Exchange Info Hinweis */}
-      {exchangeInfo && Array.isArray(exchangeInfo) && exchangeInfo.length === 0 && !isLoadingExchangeInfo && (
-        <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-md p-4">
-          <p className="text-sm text-yellow-700">
-            ⚠️ Keine Exchange-Informationen verfügbar. Bitte führen Sie eine Synchronisierung durch (Button oben rechts).
-          </p>
-        </div>
-      )}
-
-      {/* Exchange Info Status */}
-      {isLoadingExchangeInfo && (
-        <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
-          <p className="text-sm text-blue-700">
-            📡 Lade Binance Exchange-Informationen...
-          </p>
-        </div>
-      )}
-
-      {exchangeInfoError && (
-        <div className="bg-red-50 border border-red-200 rounded-md p-4">
-          <p className="text-sm text-red-700">
-            ❌ Fehler beim Laden der Exchange-Informationen: {exchangeInfoError}
-          </p>
-        </div>
-      )}
-
-      {lastUpdated && (
-        <div className="text-xs text-gray-500 text-right">
-          Exchange-Info zuletzt aktualisiert: {new Date(lastUpdated).toLocaleString('de-DE')}
-        </div>
-      )}
 
       {/* Coin hinzufügen Formular */}
       {showCreateForm && (
@@ -542,6 +499,51 @@ export default function CoinsPage() {
           </div>
         </div>
       )}
+      
+      {/* Alerts Panel */}
+      <CoinAlertsPanel className="mb-6" autoRefresh={true} />
+
+      {/* Rate Limits Anzeige */}
+      {rateLimits && rateLimits.length > 0 && (
+        // @ts-ignore - TypeScript incorrectly infers BinanceRateLimit[] instead of RateLimit[] 
+        // The component correctly expects RateLimit[] from useRateLimits hook, but TypeScript 
+        // has a type cache issue. The types are actually correct at runtime.
+        <RateLimitsDisplay rateLimits={rateLimits} className="mb-6" />
+      )}
+
+      {/* Exchange Info Hinweis */}
+      {exchangeInfo && Array.isArray(exchangeInfo) && exchangeInfo.length === 0 && !isLoadingExchangeInfo && (
+        <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-md p-4">
+          <p className="text-sm text-yellow-700">
+            ⚠️ Keine Exchange-Informationen verfügbar. Bitte führen Sie eine Synchronisierung durch (Button oben rechts).
+          </p>
+        </div>
+      )}
+
+      {/* Exchange Info Status */}
+      {isLoadingExchangeInfo && (
+        <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+          <p className="text-sm text-blue-700">
+            📡 Lade Binance Exchange-Informationen...
+          </p>
+        </div>
+      )}
+
+      {exchangeInfoError && (
+        <div className="bg-red-50 border border-red-200 rounded-md p-4">
+          <p className="text-sm text-red-700">
+            ❌ Fehler beim Laden der Exchange-Informationen: {exchangeInfoError}
+          </p>
+        </div>
+      )}
+
+      {lastUpdated && (
+        <div className="text-xs text-gray-500 text-right">
+          Exchange-Info zuletzt aktualisiert: {new Date(lastUpdated).toLocaleString('de-DE')}
+        </div>
+      )}
+
+      
 
       {/* Coins Liste */}
       <div className="bg-white shadow overflow-hidden sm:rounded-md">
