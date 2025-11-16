@@ -2899,77 +2899,71 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
     openPositions.set(positionKey, position);
 
     // TRAILING STOP LOSS LOGIK
+    // WICHTIG: Trailing Stop ist aktiviert, wenn useTrailingStop === true (wird beim Kauf gesetzt)
+    // Bei jedem Preis-Update wird geprüft:
+    // 1. Falls trailing_stop_price noch nicht initialisiert: Prüfe Aktivierungsschwelle (NUR EINMAL)
+    // 2. Falls bereits initialisiert: Update highest_price und trailing_stop_price wenn nötig
+    // 3. Prüfe ob Verkauf ausgelöst werden muss
     if (useTrailingStop && stopLossPercent > 0) {
-      // Initialisiere Trailing Stop Felder falls nicht vorhanden
       const oldHighestPrice = position.highestPrice ?? position.entryPrice;
       let highestPrice = oldHighestPrice;
       let trailingStopPrice = position.trailingStopPrice;
       const trailingActivationThreshold = position.trailingStopActivationThreshold ?? activationThreshold;
 
-      // Prüfe ob Trailing Stop aktiviert werden soll (Mindest-Gewinn-Schwelle)
-      const shouldActivateTrailing = trailingActivationThreshold === 0 || priceChangePercent >= trailingActivationThreshold;
-
-      // WICHTIG: Prüfe ob Trailing Stop bereits aktiviert ist (unabhängig von Aktivierungsschwelle)
-      // Dies ist kritisch, damit der Verkauf auch ausgelöst wird, wenn die Aktivierungsschwelle nicht mehr erfüllt ist
-      const trailingStopAlreadyActive = trailingStopPrice !== null && trailingStopPrice !== undefined && !isNaN(trailingStopPrice);
-
-      if (shouldActivateTrailing) {
-        // Update highest_price wenn currentPrice > highestPrice
-        if (currentPrice > highestPrice) {
-          highestPrice = currentPrice;
-        }
-        
-        // Initialisiere oder aktualisiere Trailing Stop Preis
-        // Wichtig: Wenn trailingStopPrice noch null ist (z.B. bei Aktivierungsschwelle), initialisiere es jetzt
-        // Oder wenn highestPrice aktualisiert wurde, aktualisiere auch trailingStopPrice
-        if (!trailingStopPrice || highestPrice > oldHighestPrice) {
-          const oldTrailingStopPrice = trailingStopPrice;
+      // SCHRITT 1: Initialisierung (NUR EINMAL wenn trailing_stop_price noch null ist)
+      // Sobald trailing_stop_price gesetzt ist, wird dieser Block nie wieder ausgeführt
+      if (trailingStopPrice === null || trailingStopPrice === undefined) {
+        // Trailing Stop wurde noch nicht initialisiert → Prüfe Aktivierungsschwelle
+        if (trailingActivationThreshold === 0 || priceChangePercent >= trailingActivationThreshold) {
+          // Aktivierungsschwelle erreicht → Initialisiere trailing_stop_price EINMALIG
+          highestPrice = Math.max(highestPrice, currentPrice);
           trailingStopPrice = highestPrice * (1 - stopLossPercent / 100);
           
-          // Validiere dass Berechnung erfolgreich war
-          if (!trailingStopPrice || isNaN(trailingStopPrice)) {
-            console.error(`❌ Fehler beim Berechnen des Trailing Stop für ${symbol}: highestPrice=${highestPrice}, stopLossPercent=${stopLossPercent}`);
-            continue; // Überspringe diese Position
-          }
+          console.log(`📈 Trailing Stop initialisiert für ${symbol}: ${trailingStopPrice.toFixed(8)} USDT (Highest: ${highestPrice.toFixed(8)})`);
+        } else {
+          // Aktivierungsschwelle noch nicht erreicht → Keine weitere Verarbeitung
+          continue;
+        }
+      } else {
+        // SCHRITT 2: Trailing Stop ist bereits initialisiert → Nur Updates, keine Aktivierungsschwelle-Prüfung mehr
+        // Update highest_price und trailing_stop_price wenn Preis gestiegen ist
+        if (currentPrice > highestPrice) {
+          highestPrice = currentPrice;
+          trailingStopPrice = highestPrice * (1 - stopLossPercent / 100);
           
-          // Log wenn Trailing Stop aktualisiert wird
-          if (!oldTrailingStopPrice) {
-            console.log(`📈 Trailing Stop aktiviert für ${symbol}: ${trailingStopPrice.toFixed(8)} USDT (Highest: ${highestPrice.toFixed(8)})`);
-          } else if (highestPrice > oldHighestPrice) {
-            console.log(`📈 Trailing Stop angepasst für ${symbol}: ${oldTrailingStopPrice.toFixed(8)} → ${trailingStopPrice.toFixed(8)} USDT (Highest: ${oldHighestPrice.toFixed(8)} → ${highestPrice.toFixed(8)})`);
-          }
-          
-          // Update In-Memory Map
-          position.highestPrice = highestPrice;
-          position.trailingStopPrice = trailingStopPrice;
-          
-          // Update Datenbank (asynchron, nicht blockierend)
-          supabase
-            .from('positions')
-            .update({
-              highest_price: highestPrice,
-              trailing_stop_price: trailingStopPrice,
-              updated_at: new Date().toISOString()
-            })
-            .eq('id', dbPosition.id)
-            .eq('strategy_id', dbPosition.strategy_id)
-            .eq('symbol', symbol)
-            .eq('status', 'open')
-            .then(() => {
-              // Optional: Logging für Trailing Stop Updates (nur bei signifikanten Änderungen)
-            })
-            .catch(err => {
-              console.warn(`⚠️  Fehler beim Update von Trailing Stop: ${err.message}`);
-            });
+          console.log(`📈 Trailing Stop angepasst für ${symbol}: ${trailingStopPrice.toFixed(8)} USDT (Highest: ${oldHighestPrice.toFixed(8)} → ${highestPrice.toFixed(8)})`);
         }
       }
 
-      // KRITISCH: Prüfe Trailing Stop Auslösung IMMER wenn er aktiviert ist
-      // (auch wenn Aktivierungsschwelle nicht mehr erfüllt ist)
-      // Dies verhindert, dass der Verkauf übersprungen wird, wenn der Preis unter den Trailing Stop fällt
-      if (trailingStopAlreadyActive || (shouldActivateTrailing && trailingStopPrice)) {
-        // Prüfe ob Trailing Stop ausgelöst wurde
-        if (trailingStopPrice && currentPrice <= trailingStopPrice) {
+      // SCHRITT 3: Update In-Memory Map und Datenbank wenn Änderungen vorgenommen wurden
+      if (highestPrice !== oldHighestPrice || trailingStopPrice !== position.trailingStopPrice) {
+        position.highestPrice = highestPrice;
+        position.trailingStopPrice = trailingStopPrice;
+        
+        // Update Datenbank (asynchron, nicht blockierend)
+        supabase
+          .from('positions')
+          .update({
+            highest_price: highestPrice,
+            trailing_stop_price: trailingStopPrice,
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', dbPosition.id)
+          .eq('strategy_id', dbPosition.strategy_id)
+          .eq('symbol', symbol)
+          .eq('status', 'open')
+          .then(() => {
+            // Optional: Logging für Trailing Stop Updates
+          })
+          .catch(err => {
+            console.warn(`⚠️  Fehler beim Update von Trailing Stop: ${err.message}`);
+          });
+      }
+
+      // SCHRITT 4: Prüfe ob Trailing Stop ausgelöst wurde (Verkauf)
+      // WICHTIG: Nur prüfen wenn trailing_stop_price bereits gesetzt ist
+      if (trailingStopPrice !== null && trailingStopPrice !== undefined && !isNaN(trailingStopPrice)) {
+        if (currentPrice <= trailingStopPrice) {
           const trailingPriceChangePercent = ((currentPrice - highestPrice) / highestPrice) * 100;
           
           console.log('');
