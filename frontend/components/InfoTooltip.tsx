@@ -1,76 +1,119 @@
-// Wiederverwendbare Tooltip-Komponente mit Info-Icon
-import React, { useState } from 'react';
+'use client';
+
+import { useState, useRef, useEffect } from 'react';
 
 interface InfoTooltipProps {
   content: string;
-  className?: string;
+  position?: 'top' | 'bottom' | 'left' | 'right' | 'auto';
+  maxWidth?: string;
 }
 
-export const InfoTooltip: React.FC<InfoTooltipProps> = ({ content, className = '' }) => {
+/**
+ * InfoTooltip - Zeigt ein "i" Icon mit Hover-Popup
+ * Automatische Positionierung verhindert Überlauf über den Bildschirmrand
+ */
+export default function InfoTooltip({ 
+  content, 
+  position = 'auto',
+  maxWidth = '300px' 
+}: InfoTooltipProps) {
   const [isVisible, setIsVisible] = useState(false);
+  const [tooltipPosition, setTooltipPosition] = useState(position);
+  const iconRef = useRef<HTMLDivElement>(null);
+  const tooltipRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isVisible && tooltipRef.current && iconRef.current && position === 'auto') {
+      const iconRect = iconRef.current.getBoundingClientRect();
+      const tooltipRect = tooltipRef.current.getBoundingClientRect();
+      const viewportWidth = window.innerWidth;
+      const viewportHeight = window.innerHeight;
+
+      // Prüfe ob Tooltip rechts über den Rand läuft
+      if (iconRect.right + tooltipRect.width > viewportWidth - 10) {
+        // Prüfe ob links genug Platz ist
+        if (iconRect.left - tooltipRect.width > 10) {
+          setTooltipPosition('left');
+        } else {
+          // Oben oder unten
+          if (iconRect.bottom + tooltipRect.height > viewportHeight - 10) {
+            setTooltipPosition('top');
+          } else {
+            setTooltipPosition('bottom');
+          }
+        }
+      } else {
+        // Standardmäßig rechts
+        setTooltipPosition('right');
+      }
+    }
+  }, [isVisible, position]);
+
+  const getTooltipClasses = () => {
+    const baseClasses = "absolute z-50 px-3 py-2 text-sm text-white bg-gray-900 rounded-lg shadow-lg whitespace-normal";
+    
+    switch (tooltipPosition) {
+      case 'top':
+        return `${baseClasses} bottom-full left-1/2 transform -translate-x-1/2 mb-2`;
+      case 'bottom':
+        return `${baseClasses} top-full left-1/2 transform -translate-x-1/2 mt-2`;
+      case 'left':
+        return `${baseClasses} right-full top-1/2 transform -translate-y-1/2 mr-2`;
+      case 'right':
+      default:
+        return `${baseClasses} left-full top-1/2 transform -translate-y-1/2 ml-2`;
+    }
+  };
+
+  const getArrowClasses = () => {
+    const baseArrow = "absolute w-2 h-2 bg-gray-900 transform rotate-45";
+    
+    switch (tooltipPosition) {
+      case 'top':
+        return `${baseArrow} -bottom-1 left-1/2 -translate-x-1/2`;
+      case 'bottom':
+        return `${baseArrow} -top-1 left-1/2 -translate-x-1/2`;
+      case 'left':
+        return `${baseArrow} -right-1 top-1/2 -translate-y-1/2`;
+      case 'right':
+      default:
+        return `${baseArrow} -left-1 top-1/2 -translate-y-1/2`;
+    }
+  };
 
   return (
-    <div className={`relative inline-block ${className}`}>
-      <button
-        type="button"
-        className="inline-flex items-center justify-center w-4 h-4 rounded-full bg-blue-100 text-blue-600 hover:bg-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 transition-colors"
+    <div className="inline-block relative" ref={iconRef}>
+      {/* Info Icon */}
+      <div
+        className="inline-flex items-center justify-center w-4 h-4 ml-1 text-xs text-gray-400 border border-gray-300 rounded-full cursor-help hover:text-blue-500 hover:border-blue-500 transition-colors"
         onMouseEnter={() => setIsVisible(true)}
         onMouseLeave={() => setIsVisible(false)}
         onFocus={() => setIsVisible(true)}
         onBlur={() => setIsVisible(false)}
-        aria-label="Informationen anzeigen"
+        tabIndex={0}
+        role="tooltip"
+        aria-label="Information"
       >
-        <svg
-          className="w-3 h-3"
-          fill="currentColor"
-          viewBox="0 0 20 20"
-          xmlns="http://www.w3.org/2000/svg"
-        >
-          <path
-            fillRule="evenodd"
-            d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z"
-            clipRule="evenodd"
-          />
-        </svg>
-      </button>
+        i
+      </div>
 
-      {/* Tooltip Popup */}
+      {/* Tooltip */}
       {isVisible && (
         <div
-          className="absolute z-50 w-64 p-3 text-xs text-gray-700 bg-white border border-gray-200 rounded-lg shadow-lg pointer-events-none"
-          style={{
-            bottom: 'calc(100% + 8px)',
-            left: '50%',
-            transform: 'translateX(-50%)',
-          }}
-          onMouseEnter={() => setIsVisible(true)}
-          onMouseLeave={() => setIsVisible(false)}
+          ref={tooltipRef}
+          className={getTooltipClasses()}
+          style={{ maxWidth }}
         >
-          <div className="whitespace-pre-line leading-relaxed">{content}</div>
-          {/* Pfeil nach unten */}
-          <div
-            className="absolute top-full left-1/2 transform -translate-x-1/2 -mt-px"
-            style={{
-              width: 0,
-              height: 0,
-              borderLeft: '6px solid transparent',
-              borderRight: '6px solid transparent',
-              borderTop: '6px solid white',
-            }}
-          />
-          <div
-            className="absolute top-full left-1/2 transform -translate-x-1/2"
-            style={{
-              width: 0,
-              height: 0,
-              borderLeft: '7px solid transparent',
-              borderRight: '7px solid transparent',
-              borderTop: '7px solid #e5e7eb',
-            }}
-          />
+          {/* Arrow */}
+          <div className={getArrowClasses()} />
+          
+          {/* Content */}
+          <div className="relative z-10">
+            {content}
+          </div>
         </div>
       )}
     </div>
   );
-};
+}
 

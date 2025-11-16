@@ -23,6 +23,9 @@ export default function CoinsPage() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   
+  // State für ausgeklappte Coins
+  const [expandedCoins, setExpandedCoins] = useState<Set<string>>(new Set());
+  
   // Exchange Info Hook (aus DB)
   const { 
     exchangeInfo, 
@@ -129,6 +132,19 @@ export default function CoinsPage() {
       defaultSelfTradePreventionMode: 'NONE',
       allowedSelfTradePreventionModes: [],
     } as BinanceSymbol;
+  };
+
+  // Toggle-Funktion für Coin-Details
+  const toggleCoinDetails = (symbol: string) => {
+    setExpandedCoins(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(symbol)) {
+        newSet.delete(symbol);
+      } else {
+        newSet.add(symbol);
+      }
+      return newSet;
+    });
   };
 
   // Handler für manuellen Sync
@@ -797,7 +813,7 @@ export default function CoinsPage() {
                     </div>
                   ) : (
                     <div className="mt-4 space-y-4">
-                      {/* Bot Config Übersicht */}
+                      {/* Bot Config Übersicht - Immer sichtbar */}
                       <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
                         <h4 className="text-sm font-semibold text-gray-700 mb-3">Bot-Konfiguration</h4>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
@@ -837,25 +853,52 @@ export default function CoinsPage() {
                         </div>
                       </div>
 
-                      {/* Binance Exchange Info */}
-                      {binanceSymbolInfo ? (
-                        <>
-                          <CoinCoreInfo symbol={binanceSymbolInfo} />
-                          <CoinDetailsAccordion symbol={binanceSymbolInfo} />
-                        </>
-                      ) : (
-                        <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3">
-                          <p className="text-sm text-yellow-700">
-                            ⚠️ Keine Binance Exchange-Informationen für {coin.symbol} verfügbar.
-                          </p>
+                      {/* Details anzeigen/ausblenden Button */}
+                      <button
+                        onClick={() => toggleCoinDetails(coin.symbol)}
+                        className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
+                      >
+                        {expandedCoins.has(coin.symbol) ? (
+                          <>
+                            <svg className="mr-2 h-5 w-5 transform rotate-180 transition-transform" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                            Binance Details ausblenden
+                          </>
+                        ) : (
+                          <>
+                            <svg className="mr-2 h-5 w-5 transition-transform" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                            </svg>
+                            Binance Details anzeigen
+                          </>
+                        )}
+                      </button>
+
+                      {/* Ausklappbare Binance Exchange Info */}
+                      {expandedCoins.has(coin.symbol) && (
+                        <div className="space-y-4 border-t border-gray-200 pt-4">
+                          {binanceSymbolInfo ? (
+                            <>
+                              <CoinCoreInfo symbol={binanceSymbolInfo} />
+                              <CoinDetailsAccordion symbol={binanceSymbolInfo} />
+                            </>
+                          ) : (
+                            <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3">
+                              <p className="text-sm text-yellow-700">
+                                ⚠️ Keine Binance Exchange-Informationen für {coin.symbol} verfügbar.
+                              </p>
+                            </div>
+                          )}
                         </div>
                       )}
 
+                      {/* Bearbeiten Button - Immer sichtbar */}
                       <button
                         onClick={() => handleStartEdit(coin)}
-                        className="mt-4 inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                        className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
                       >
-                        Bearbeiten
+                        ✏️ Bearbeiten
                       </button>
                     </div>
                   )}
