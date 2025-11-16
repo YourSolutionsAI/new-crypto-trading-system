@@ -1657,9 +1657,23 @@ app.get('/api/positions', async (req, res) => {
               settings: coinConfig.settings || {},
               risk: coinConfig.risk || {}
             };
+            
+            // DEBUG: Logge Config für BTCUSDT
+            if (position.symbol === 'BTCUSDT') {
+              console.log(`🔍 DEBUG Config für ${position.symbol}:`, {
+                baseConfig: baseConfig.risk,
+                coinConfig_risk: coinConfig.risk,
+                merged_risk: fullStrategyConfig.risk,
+                take_profit_percent: fullStrategyConfig.risk?.take_profit_percent
+              });
+            }
           } else {
             // Fallback: Nur Basis-Strategie Config
             fullStrategyConfig = baseStrategy.config || {};
+            
+            if (position.symbol === 'BTCUSDT') {
+              console.log(`⚠️ Keine coin_strategies gefunden für ${position.symbol}, verwende Fallback`);
+            }
           }
           
           // Hole Preis-Historie für MA-Berechnung
