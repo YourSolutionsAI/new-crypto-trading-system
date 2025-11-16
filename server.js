@@ -1444,6 +1444,383 @@ app.patch('/api/coins/:symbol/toggle', async (req, res) => {
   }
 });
 
+// ================================================================
+// EXCHANGE INFO & ALERTS API ENDPOINTS
+// ================================================================
+
+/**
+ * Gibt die aktuellen Binance Rate Limits zurück
+ * GET /api/rate-limits
+ */
+app.get('/api/rate-limits', async (req, res) => {
+  try {
+    const { data: rateLimits, error } = await supabase
+      .from('binance_rate_limits')
+      .select('*')
+      .order('last_updated_at', { ascending: false })
+      .limit(10); // Max 10 Rate Limits (sollten nur 3-5 sein)
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      rateLimits: rateLimits || [],
+      count: rateLimits?.length || 0,
+      lastUpdated: rateLimits?.[0]?.last_updated_at || null
+    });
+  } catch (error) {
+    console.error('Fehler beim Laden der Rate Limits:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Laden der Rate Limits',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Gibt Exchange-Informationen für alle oder spezifische Coins zurück
+ * GET /api/exchange-info?symbols=BTCUSDT,ETHUSDT (optional)
+ */
+app.get('/api/exchange-info', async (req, res) => {
+  try {
+    const { symbols } = req.query;
+    
+    let query = supabase
+      .from('coin_exchange_info')
+      .select('*')
+      .order('symbol', { ascending: true });
+    
+    // Filtere nach spezifischen Symbolen wenn angegeben
+    if (symbols) {
+      const symbolArray = symbols.split(',').map(s => s.trim());
+      query = query.in('symbol', symbolArray);
+    }
+    
+    const { data: exchangeInfo, error } = await query;
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      exchangeInfo: exchangeInfo || [],
+      count: exchangeInfo?.length || 0,
+      lastUpdated: exchangeInfo?.[0]?.last_updated_at || null
+    });
+  } catch (error) {
+    console.error('Fehler beim Laden der Exchange-Info:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Laden der Exchange-Informationen',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Synchronisiert Exchange-Informationen mit Binance API
+ * POST /api/exchange-info/sync
+ * Body: { symbols?: string[] } (optional, sonst alle Coins aus coin_strategies)
+ */
+app.post('/api/exchange-info/sync', async (req, res) => {
+  try {
+    console.log('🔄 Starting Exchange Info Sync...');
+    
+    const { symbols: requestedSymbols } = req.body;
+    
+    // 1. Bestimme welche Symbole synchronisiert werden sollen
+    let symbolsToSync = [];
+    
+    if (requestedSymbols && Array.isArray(requestedSymbols)) {
+      symbolsToSync = requestedSymbols;
+    } else {
+      // Hole alle Symbole aus coin_strategies
+      const { data: coinStrategies, error: coinsError } = await supabase
+        .from('coin_strategies')
+        .select('symbol');
+      
+      if (coinsError) throw coinsError;
+      symbolsToSync = coinStrategies.map(cs => cs.symbol);
+    }
+    
+    if (symbolsToSync.length === 0) {
+      return res.json({
+        success: true,
+        message: 'Keine Coins zum Synchronisieren gefunden',
+        synced: 0,
+        errors: []
+      });
+    }
+    
+    console.log(`📊 Syncing ${symbolsToSync.length} symbols:`, symbolsToSync);
+    
+    // 2. Hole Exchange-Info von Binance (Testnet)
+    const axios = require('axios');
+    const binanceUrl = 'https://testnet.binance.vision/api/v3/exchangeInfo';
+    
+    const response = await axios.get(binanceUrl, { timeout: 10000 });
+    const exchangeInfo = response.data;
+    
+    console.log(`✅ Loaded ${exchangeInfo.symbols.length} symbols from Binance`);
+    
+    // 2a. Synchronisiere Rate Limits (global, nicht pro Symbol)
+    try {
+      console.log('📊 Syncing Rate Limits...');
+      
+      // Lösche alte Rate Limits
+      await supabase.from('binance_rate_limits').delete().neq('id', 0);
+      
+      // Füge neue Rate Limits ein
+      for (const rateLimit of exchangeInfo.rateLimits) {
+        await supabase.from('binance_rate_limits').insert({
+          rate_limit_type: rateLimit.rateLimitType,
+          interval: rateLimit.interval,
+          interval_num: rateLimit.intervalNum,
+          limit_value: rateLimit.limit,
+          last_updated_at: new Date().toISOString()
+        });
+      }
+      
+      console.log(`✅ Synced ${exchangeInfo.rateLimits.length} Rate Limits`);
+    } catch (rateLimitError) {
+      console.error('⚠️  Error syncing Rate Limits:', rateLimitError.message);
+      // Fehler nicht werfen, da Symbole wichtiger sind
+    }
+    
+    // 3. Verarbeite jeden unserer Coins
+    const results = [];
+    const errors = [];
+    
+    for (const symbol of symbolsToSync) {
+      try {
+        // Finde Symbol in Binance-Daten
+        const binanceSymbol = exchangeInfo.symbols.find(s => s.symbol === symbol);
+        
+        if (!binanceSymbol) {
+          console.warn(`⚠️  Symbol ${symbol} nicht in Binance Exchange-Info gefunden`);
+          errors.push({ symbol, error: 'Symbol nicht gefunden' });
+          continue;
+        }
+        
+        // Extrahiere Filter
+        const priceFilter = binanceSymbol.filters.find(f => f.filterType === 'PRICE_FILTER');
+        const lotSizeFilter = binanceSymbol.filters.find(f => f.filterType === 'LOT_SIZE');
+        const notionalFilter = binanceSymbol.filters.find(f => f.filterType === 'NOTIONAL');
+        
+        // Bereite Daten für DB vor
+        const exchangeInfoData = {
+          symbol: binanceSymbol.symbol,
+          status: binanceSymbol.status,
+          is_spot_trading_allowed: binanceSymbol.isSpotTradingAllowed,
+          is_margin_trading_allowed: binanceSymbol.isMarginTradingAllowed,
+          quote_order_qty_market_allowed: binanceSymbol.quoteOrderQtyMarketAllowed,
+          allow_trailing_stop: binanceSymbol.allowTrailingStop,
+          base_asset: binanceSymbol.baseAsset,
+          quote_asset: binanceSymbol.quoteAsset,
+          base_asset_precision: binanceSymbol.baseAssetPrecision,
+          quote_asset_precision: binanceSymbol.quoteAssetPrecision,
+          quote_precision: binanceSymbol.quotePrecision,
+          base_commission_precision: binanceSymbol.baseCommissionPrecision,
+          quote_commission_precision: binanceSymbol.quoteCommissionPrecision,
+          order_types: binanceSymbol.orderTypes,
+          iceberg_allowed: binanceSymbol.icebergAllowed,
+          oco_allowed: binanceSymbol.ocoAllowed,
+          oto_allowed: binanceSymbol.otoAllowed,
+          cancel_replace_allowed: binanceSymbol.cancelReplaceAllowed,
+          amend_allowed: binanceSymbol.amendAllowed,
+          peg_instructions_allowed: binanceSymbol.pegInstructionsAllowed || false,
+          default_self_trade_prevention_mode: binanceSymbol.defaultSelfTradePreventionMode || 'NONE',
+          allowed_self_trade_prevention_modes: binanceSymbol.allowedSelfTradePreventionModes || [],
+          min_price: priceFilter?.minPrice || null,
+          max_price: priceFilter?.maxPrice || null,
+          tick_size: priceFilter?.tickSize || null,
+          min_qty: lotSizeFilter?.minQty || null,
+          max_qty: lotSizeFilter?.maxQty || null,
+          step_size: lotSizeFilter?.stepSize || null,
+          min_notional: notionalFilter?.minNotional || null,
+          max_notional: notionalFilter?.maxNotional || null,
+          apply_min_to_market: notionalFilter?.applyMinToMarket || false,
+          filters: binanceSymbol.filters,
+          permissions: binanceSymbol.permissions,
+          permission_sets: binanceSymbol.permissionSets || null,
+          last_updated_at: new Date().toISOString()
+        };
+        
+        // Upsert in DB (Insert oder Update wenn schon vorhanden)
+        const { data, error: upsertError } = await supabase
+          .from('coin_exchange_info')
+          .upsert(exchangeInfoData, { 
+            onConflict: 'symbol',
+            returning: 'minimal'
+          });
+        
+        if (upsertError) throw upsertError;
+        
+        results.push({ symbol, status: 'synced' });
+        console.log(`✅ Synced ${symbol}`);
+        
+      } catch (error) {
+        console.error(`❌ Error syncing ${symbol}:`, error.message);
+        errors.push({ symbol, error: error.message });
+      }
+    }
+    
+    console.log(`🎉 Sync completed: ${results.length} success, ${errors.length} errors`);
+    
+    res.json({
+      success: true,
+      message: `Synchronisiert: ${results.length} von ${symbolsToSync.length} Symbolen`,
+      synced: results.length,
+      errors: errors.length > 0 ? errors : undefined,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Fehler beim Synchronisieren der Exchange-Info:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Synchronisieren der Exchange-Informationen',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Gibt alle Alerts zurück (optional gefiltert)
+ * GET /api/alerts?acknowledged=false&severity=critical&symbol=BTCUSDT
+ */
+app.get('/api/alerts', async (req, res) => {
+  try {
+    const { acknowledged, severity, symbol, limit = 50 } = req.query;
+    
+    let query = supabase
+      .from('coin_alerts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(parseInt(limit));
+    
+    // Filter anwenden
+    if (acknowledged !== undefined) {
+      query = query.eq('is_acknowledged', acknowledged === 'true');
+    }
+    
+    if (severity) {
+      query = query.eq('severity', severity);
+    }
+    
+    if (symbol) {
+      query = query.eq('symbol', symbol);
+    }
+    
+    const { data: alerts, error } = await query;
+    
+    if (error) throw error;
+    
+    // Zähle unbestätigte Alerts
+    const { count: unacknowledgedCount } = await supabase
+      .from('coin_alerts')
+      .select('*', { count: 'exact', head: true })
+      .eq('is_acknowledged', false);
+    
+    res.json({
+      success: true,
+      alerts: alerts || [],
+      count: alerts?.length || 0,
+      unacknowledgedCount: unacknowledgedCount || 0
+    });
+  } catch (error) {
+    console.error('Fehler beim Laden der Alerts:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Laden der Alerts',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Bestätigt einen Alert
+ * PATCH /api/alerts/:id/acknowledge
+ */
+app.patch('/api/alerts/:id/acknowledge', async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const { data, error } = await supabase
+      .from('coin_alerts')
+      .update({
+        is_acknowledged: true,
+        acknowledged_at: new Date().toISOString()
+      })
+      .eq('id', id)
+      .select()
+      .single();
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      message: 'Alert wurde bestätigt',
+      alert: data
+    });
+  } catch (error) {
+    console.error('Fehler beim Bestätigen des Alerts:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Bestätigen des Alerts',
+      error: error.message
+    });
+  }
+});
+
+/**
+ * Bestätigt alle Alerts (optional gefiltert nach Symbol oder Severity)
+ * POST /api/alerts/acknowledge-all
+ * Body: { symbol?: string, severity?: string }
+ */
+app.post('/api/alerts/acknowledge-all', async (req, res) => {
+  try {
+    const { symbol, severity } = req.body;
+    
+    let query = supabase
+      .from('coin_alerts')
+      .update({
+        is_acknowledged: true,
+        acknowledged_at: new Date().toISOString()
+      })
+      .eq('is_acknowledged', false);
+    
+    if (symbol) {
+      query = query.eq('symbol', symbol);
+    }
+    
+    if (severity) {
+      query = query.eq('severity', severity);
+    }
+    
+    const { data, error } = await query.select();
+    
+    if (error) throw error;
+    
+    res.json({
+      success: true,
+      message: `${data?.length || 0} Alerts wurden bestätigt`,
+      count: data?.length || 0
+    });
+  } catch (error) {
+    console.error('Fehler beim Bestätigen der Alerts:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Bestätigen der Alerts',
+      error: error.message
+    });
+  }
+});
+
+// ================================================================
+// TRADES API ENDPOINTS
+// ================================================================
+
 /**
  * Gibt Trades zurück
  */

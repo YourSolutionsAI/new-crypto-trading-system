@@ -1,9 +1,18 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { getCoins, getStrategies, updateCoinStrategy, toggleCoin, createCoin } from '@/lib/api';
+import { getCoins, getStrategies, updateCoinStrategy, toggleCoin, createCoin, syncExchangeInfo } from '@/lib/api';
 import type { CoinStrategy, Strategy } from '@/lib/types';
-import { formatNumber, parseFormattedNumber, formatNumberInput } from '@/lib/numberFormat';
+import type { BinanceSymbol } from '@/lib/binance-types';
+import { formatNumber, parseFormattedNumber } from '@/lib/numberFormat';
+import { useExchangeInfo } from '@/hooks/useExchangeInfo';
+import { useRateLimits } from '@/hooks/useRateLimits';
+import type { RateLimit } from '@/hooks/useRateLimits';
+import { RateLimitsDisplay } from '@/components/RateLimitsDisplay';
+import { SymbolSearchDropdown } from '@/components/SymbolSearchDropdown';
+import { CoinCoreInfo } from '@/components/CoinCoreInfo';
+import { CoinDetailsAccordion } from '@/components/CoinDetailsAccordion';
+import { CoinAlertsPanel } from '@/components/CoinAlertsPanel';
 
 export default function CoinsPage() {
   const [coins, setCoins] = useState<CoinStrategy[]>([]);
@@ -11,6 +20,30 @@ export default function CoinsPage() {
   const [loading, setLoading] = useState(true);
   const [editingSymbol, setEditingSymbol] = useState<string | null>(null);
   const [showCreateForm, setShowCreateForm] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  
+  // Exchange Info Hook (aus DB)
+  const { 
+    exchangeInfo, 
+    spotUsdtSymbols, 
+    isLoading: isLoadingExchangeInfo, 
+    error: exchangeInfoError,
+    lastUpdated,
+    refetch: refetchExchangeInfo
+  } = useExchangeInfo();
+
+  // Rate Limits Hook (aus DB)
+  const {
+    rateLimits: rateLimitsFromHook,
+    isLoading: isLoadingRateLimits,
+    error: rateLimitsError,
+    refetch: refetchRateLimits,
+  } = useRateLimits();
+  
+  // Explizite Typisierung für TypeScript
+  const rateLimits: RateLimit[] = rateLimitsFromHook;
+
   const [editForm, setEditForm] = useState<{
     strategy_id?: string | null;
     active?: boolean;
@@ -61,6 +94,75 @@ export default function CoinsPage() {
     }
   };
 
+  // Helper: Finde Binance Symbol Info für ein Coin (aus DB-Daten)
+  const getBinanceSymbolInfo = (symbol: string): BinanceSymbol | null => {
+    if (!exchangeInfo || !Array.isArray(exchangeInfo) || exchangeInfo.length === 0) return null;
+    
+    const info = exchangeInfo.find(ei => ei.symbol === symbol);
+    if (!info) return null;
+    
+    // Konvertiere DB-Format zu Binance-Format
+    return {
+      symbol: info.symbol,
+      status: info.status || 'TRADING',
+      baseAsset: info.base_asset,
+      quoteAsset: info.quote_asset,
+      isSpotTradingAllowed: info.is_spot_trading_allowed,
+      isMarginTradingAllowed: info.is_margin_trading_allowed,
+      quoteOrderQtyMarketAllowed: info.quote_order_qty_market_allowed,
+      allowTrailingStop: info.allow_trailing_stop,
+      baseAssetPrecision: info.base_asset_precision,
+      quoteAssetPrecision: info.quote_asset_precision,
+      quotePrecision: info.quote_precision,
+      baseCommissionPrecision: info.base_commission_precision,
+      quoteCommissionPrecision: info.quote_commission_precision,
+      orderTypes: info.order_types || [],
+      icebergAllowed: info.iceberg_allowed,
+      ocoAllowed: info.oco_allowed,
+      otoAllowed: info.oto_allowed,
+      cancelReplaceAllowed: info.cancel_replace_allowed,
+      amendAllowed: info.amend_allowed,
+      pegInstructionsAllowed: false,
+      filters: info.filters || [],
+      permissions: info.permissions || [],
+      permissionSets: info.permission_sets,
+      defaultSelfTradePreventionMode: 'NONE',
+      allowedSelfTradePreventionModes: [],
+    } as BinanceSymbol;
+  };
+
+  // Handler für manuellen Sync
+  const handleManualSync = async () => {
+    setIsSyncing(true);
+    setSyncMessage(null);
+    
+    try {
+      console.log('🔄 Starting manual sync...');
+      const result = await syncExchangeInfo();
+      
+      if (result.success) {
+        setSyncMessage(`✅ ${result.message}`);
+        // Lade Exchange-Info und Rate Limits neu
+        await Promise.all([
+          refetchExchangeInfo(),
+          refetchRateLimits()
+        ]);
+      } else {
+        setSyncMessage(`⚠️ Sync mit Fehlern: ${result.message}`);
+      }
+      
+      // Lade Coins neu (falls neue hinzugefügt wurden)
+      await loadData();
+    } catch (error: any) {
+      console.error('❌ Sync error:', error);
+      setSyncMessage(`❌ Fehler: ${error.message}`);
+    } finally {
+      setIsSyncing(false);
+      // Nachricht nach 5 Sekunden ausblenden
+      setTimeout(() => setSyncMessage(null), 5000);
+    }
+  };
+
   const handleStartEdit = (coin: CoinStrategy) => {
     setEditingSymbol(coin.symbol);
     const formData = {
@@ -76,7 +178,6 @@ export default function CoinsPage() {
       trailing_stop_activation_threshold: coin.config?.risk?.trailing_stop_activation_threshold,
     };
     setEditForm(formData);
-    // Initialisiere Input-Werte mit formatierten Zahlen
     setInputValues({
       signal_threshold_percent: formData.signal_threshold_percent !== undefined ? formatNumber(formData.signal_threshold_percent, 3) : '',
       signal_cooldown_ms: formData.signal_cooldown_ms !== undefined ? formatNumber(formData.signal_cooldown_ms, 0) : '',
@@ -153,19 +254,12 @@ export default function CoinsPage() {
   const handleSaveCreate = async () => {
     try {
       if (!createForm.symbol.trim()) {
-        alert('Bitte geben Sie ein Coin-Symbol ein (z.B. BTCUSDT).');
-        return;
-      }
-
-      // Validiere Symbol-Format (sollte mit USDT enden)
-      const symbol = createForm.symbol.trim().toUpperCase();
-      if (!symbol.endsWith('USDT')) {
-        alert('Das Symbol muss mit USDT enden (z.B. BTCUSDT, ETHUSDT).');
+        alert('Bitte wählen Sie ein Coin-Symbol aus.');
         return;
       }
 
       await createCoin({
-        symbol: symbol,
+        symbol: createForm.symbol,
         strategy_id: createForm.strategy_id || null,
         active: createForm.active !== undefined ? createForm.active : false,
         config: {
@@ -198,9 +292,6 @@ export default function CoinsPage() {
     }
   };
 
-  // Erstelle Set aller vorhandenen Coin-Symbole für schnellen Zugriff
-  const coinsSet = new Set(coins.map(c => c.symbol));
-  // Kombiniere alle Coins: vorhandene + neue (falls welche hinzugefügt wurden)
   const allCoins = [...coins];
 
   if (loading) {
@@ -212,7 +303,8 @@ export default function CoinsPage() {
   }
 
   return (
-    <div className="px-4 py-6 sm:px-0">
+    <div className="px-4 py-6 sm:px-0 space-y-6">
+      {/* Header */}
       <div className="mb-6">
         <div className="flex items-center justify-between">
           <div>
@@ -221,34 +313,122 @@ export default function CoinsPage() {
               Coins verwalten, Strategien zuweisen und Coin-spezifische Einstellungen konfigurieren
             </p>
           </div>
-          {!showCreateForm && (
+          <div className="flex items-center space-x-2">
+            {/* Manual Sync Button */}
             <button
-              onClick={handleStartCreate}
-              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+              onClick={handleManualSync}
+              disabled={isSyncing}
+              className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md shadow-sm text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 disabled:bg-gray-100 disabled:cursor-not-allowed"
+              title="Exchange-Info von Binance synchronisieren"
             >
-              Neuen Coin hinzufügen
+              {isSyncing ? (
+                <>
+                  <svg className="animate-spin -ml-1 mr-2 h-4 w-4 text-gray-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                  </svg>
+                  Synchronisiere...
+                </>
+              ) : (
+                <>
+                  🔄 Exchange-Info synchronisieren
+                </>
+              )}
             </button>
-          )}
+            
+            {!showCreateForm && (
+              <button
+                onClick={handleStartCreate}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+              >
+                Neuen Coin hinzufügen
+              </button>
+            )}
+          </div>
         </div>
+        
+        {/* Sync Message */}
+        {syncMessage && (
+          <div className={`mt-4 p-4 rounded-md ${
+            syncMessage.startsWith('✅') ? 'bg-green-50 border border-green-200' :
+            syncMessage.startsWith('⚠️') ? 'bg-yellow-50 border border-yellow-200' :
+            'bg-red-50 border border-red-200'
+          }`}>
+            <p className={`text-sm ${
+              syncMessage.startsWith('✅') ? 'text-green-700' :
+              syncMessage.startsWith('⚠️') ? 'text-yellow-700' :
+              'text-red-700'
+            }`}>
+              {syncMessage}
+            </p>
+          </div>
+        )}
       </div>
+      
+      {/* Alerts Panel */}
+      <CoinAlertsPanel className="mb-6" autoRefresh={true} />
 
+      {/* Rate Limits Anzeige */}
+      {rateLimits && rateLimits.length > 0 && (
+        // @ts-ignore - TypeScript incorrectly infers BinanceRateLimit[] instead of RateLimit[] 
+        // The component correctly expects RateLimit[] from useRateLimits hook, but TypeScript 
+        // has a type cache issue. The types are actually correct at runtime.
+        <RateLimitsDisplay rateLimits={rateLimits} className="mb-6" />
+      )}
+
+      {/* Exchange Info Hinweis */}
+      {exchangeInfo && Array.isArray(exchangeInfo) && exchangeInfo.length === 0 && !isLoadingExchangeInfo && (
+        <div className="mb-6 bg-yellow-50 border border-yellow-200 rounded-md p-4">
+          <p className="text-sm text-yellow-700">
+            ⚠️ Keine Exchange-Informationen verfügbar. Bitte führen Sie eine Synchronisierung durch (Button oben rechts).
+          </p>
+        </div>
+      )}
+
+      {/* Exchange Info Status */}
+      {isLoadingExchangeInfo && (
+        <div className="bg-blue-50 border border-blue-200 rounded-md p-4">
+          <p className="text-sm text-blue-700">
+            📡 Lade Binance Exchange-Informationen...
+          </p>
+        </div>
+      )}
+
+      {exchangeInfoError && (
+        <div className="bg-red-50 border border-red-200 rounded-md p-4">
+          <p className="text-sm text-red-700">
+            ❌ Fehler beim Laden der Exchange-Informationen: {exchangeInfoError}
+          </p>
+        </div>
+      )}
+
+      {lastUpdated && (
+        <div className="text-xs text-gray-500 text-right">
+          Exchange-Info zuletzt aktualisiert: {new Date(lastUpdated).toLocaleString('de-DE')}
+        </div>
+      )}
+
+      {/* Coin hinzufügen Formular */}
       {showCreateForm && (
         <div className="mb-6 bg-white shadow overflow-hidden sm:rounded-md p-6">
           <h2 className="text-xl font-semibold text-gray-900 mb-4">Neuen Coin hinzufügen</h2>
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-gray-700">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
                 Coin-Symbol <span className="text-red-500">*</span>
               </label>
-              <input
-                type="text"
+              <SymbolSearchDropdown
+                symbols={spotUsdtSymbols}
                 value={createForm.symbol}
-                onChange={(e) => setCreateForm({ ...createForm, symbol: e.target.value.toUpperCase() })}
-                placeholder="z.B. BTCUSDT, ETHUSDT"
-                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm px-3 py-2"
+                onChange={(symbol) => setCreateForm({ ...createForm, symbol })}
+                placeholder="Symbol suchen (z.B. BTC, ETH, DOGE)..."
+                disabled={isLoadingExchangeInfo}
               />
-              <p className="mt-1 text-xs text-gray-500">Das Symbol muss mit USDT enden (z.B. BTCUSDT)</p>
+              <p className="mt-1 text-xs text-gray-500">
+                Nur handelbare Spot-USDT-Paare werden angezeigt ({spotUsdtSymbols.length} verfügbar)
+              </p>
             </div>
+            
             <div>
               <label className="block text-sm font-medium text-gray-700">
                 Strategie
@@ -271,6 +451,7 @@ export default function CoinsPage() {
                 ))}
               </select>
             </div>
+            
             <div className="flex items-center">
               <input
                 type="checkbox"
@@ -291,10 +472,12 @@ export default function CoinsPage() {
                 Coin aktivieren
               </label>
             </div>
+            
             <div className="flex space-x-3 pt-4">
               <button
                 onClick={handleSaveCreate}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+                disabled={!createForm.symbol}
+                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500 disabled:bg-gray-400 disabled:cursor-not-allowed"
               >
                 Coin erstellen
               </button>
@@ -305,6 +488,7 @@ export default function CoinsPage() {
                 Abbrechen
               </button>
             </div>
+            
             <p className="text-xs text-gray-500 mt-2">
               💡 Tipp: Sie können nach dem Erstellen die Coin-spezifischen Einstellungen (Trade Size, Stop Loss, etc.) über "Bearbeiten" konfigurieren.
             </p>
@@ -312,6 +496,7 @@ export default function CoinsPage() {
         </div>
       )}
 
+      {/* Coins Liste */}
       <div className="bg-white shadow overflow-hidden sm:rounded-md">
         <ul className="divide-y divide-gray-200">
           {allCoins.length === 0 && !showCreateForm ? (
@@ -321,10 +506,11 @@ export default function CoinsPage() {
           ) : (
             allCoins.map((coin) => {
               const isEditing = editingSymbol === coin.symbol;
+              const binanceSymbolInfo = getBinanceSymbolInfo(coin.symbol);
 
               return (
                 <li key={coin.symbol} className="px-6 py-4">
-                  <div className="flex items-center justify-between">
+                  <div className="flex items-center justify-between mb-4">
                     <div className="flex-1">
                       <div className="flex items-center">
                         <h3 className="text-lg font-medium text-gray-900">
@@ -346,254 +532,258 @@ export default function CoinsPage() {
                           {coin.active ? 'Aktiv' : 'Inaktiv'}
                         </span>
                       </div>
+                    </div>
+                  </div>
 
-                      {isEditing ? (
-                      <div className="mt-4 space-y-4">
-                        {/* Strategie-Auswahl */}
-                        <div>
-                          <label className="block text-sm font-medium text-gray-700">
-                            Strategie
-                          </label>
-                          <select
-                            value={editForm.strategy_id || ''}
-                            onChange={(e) =>
-                              setEditForm({
-                                ...editForm,
-                                strategy_id: e.target.value || null,
-                              })
-                            }
-                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                          >
-                            <option value="">Keine Strategie</option>
-                            {strategies.map((s) => (
-                              <option key={s.id} value={s.id}>
-                                {s.name}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                  {isEditing ? (
+                    <div className="mt-4 space-y-4">
+                      {/* Strategie-Auswahl */}
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700">
+                          Strategie
+                        </label>
+                        <select
+                          value={editForm.strategy_id || ''}
+                          onChange={(e) =>
+                            setEditForm({
+                              ...editForm,
+                              strategy_id: e.target.value || null,
+                            })
+                          }
+                          className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                        >
+                          <option value="">Keine Strategie</option>
+                          {strategies.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.name}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
 
-                        {/* Settings */}
-                        <div className="border-t border-gray-200 pt-4">
-                          <h4 className="text-sm font-medium text-gray-900 mb-3">
-                            Signal-Einstellungen
-                          </h4>
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700">
-                                Signal Threshold (%)
-                              </label>
-                              <input
-                                type="text"
-                                value={inputValues.signal_threshold_percent ?? (editForm.signal_threshold_percent !== undefined ? formatNumber(editForm.signal_threshold_percent, 3) : '')}
-                                onChange={(e) => {
-                                  setInputValues({ ...inputValues, signal_threshold_percent: e.target.value });
-                                }}
-                                onBlur={(e) => {
-                                  const parsed = parseFormattedNumber(e.target.value);
-                                  setEditForm({
-                                    ...editForm,
-                                    signal_threshold_percent: parsed,
-                                  });
-                                  if (parsed !== undefined) {
-                                    setInputValues({ ...inputValues, signal_threshold_percent: formatNumber(parsed, 3) });
-                                  }
-                                }}
-                                placeholder="0,000"
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700">
-                                Signal Cooldown (ms)
-                              </label>
-                              <input
-                                type="text"
-                                value={inputValues.signal_cooldown_ms ?? (editForm.signal_cooldown_ms !== undefined ? formatNumber(editForm.signal_cooldown_ms, 0) : '')}
-                                onChange={(e) => {
-                                  setInputValues({ ...inputValues, signal_cooldown_ms: e.target.value });
-                                }}
-                                onBlur={(e) => {
-                                  const parsed = parseFormattedNumber(e.target.value);
-                                  const value = parsed ? Math.floor(parsed) : undefined;
-                                  setEditForm({
-                                    ...editForm,
-                                    signal_cooldown_ms: value,
-                                  });
-                                  if (value !== undefined) {
-                                    setInputValues({ ...inputValues, signal_cooldown_ms: formatNumber(value, 0) });
-                                  }
-                                }}
-                                placeholder="0"
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700">
-                                Trade Cooldown (ms)
-                              </label>
-                              <input
-                                type="text"
-                                value={inputValues.trade_cooldown_ms ?? (editForm.trade_cooldown_ms !== undefined ? formatNumber(editForm.trade_cooldown_ms, 0) : '')}
-                                onChange={(e) => {
-                                  setInputValues({ ...inputValues, trade_cooldown_ms: e.target.value });
-                                }}
-                                onBlur={(e) => {
-                                  const parsed = parseFormattedNumber(e.target.value);
-                                  const value = parsed ? Math.floor(parsed) : undefined;
-                                  setEditForm({
-                                    ...editForm,
-                                    trade_cooldown_ms: value,
-                                  });
-                                  if (value !== undefined) {
-                                    setInputValues({ ...inputValues, trade_cooldown_ms: formatNumber(value, 0) });
-                                  }
-                                }}
-                                placeholder="0"
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
-                              />
-                              <p className="mt-1 text-xs text-gray-500">Pause zwischen Trades für diesen Coin (pro Coin individuell)</p>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* Risk Management */}
-                        <div className="border-t border-gray-200 pt-4">
-                          <h4 className="text-sm font-medium text-gray-900 mb-3">
-                            Risk Management
-                          </h4>
-                          <div className="grid grid-cols-2 gap-4">
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700">
-                                Trade Size (USDT)
-                              </label>
-                              <input
-                                type="text"
-                                value={inputValues.max_trade_size_usdt ?? (editForm.max_trade_size_usdt !== undefined ? formatNumber(editForm.max_trade_size_usdt, 2) : '')}
-                                onChange={(e) => {
-                                  setInputValues({ ...inputValues, max_trade_size_usdt: e.target.value });
-                                }}
-                                onBlur={(e) => {
-                                  const parsed = parseFormattedNumber(e.target.value);
-                                  setEditForm({
-                                    ...editForm,
-                                    max_trade_size_usdt: parsed,
-                                  });
-                                  if (parsed !== undefined) {
-                                    setInputValues({ ...inputValues, max_trade_size_usdt: formatNumber(parsed, 2) });
-                                  }
-                                }}
-                                placeholder="0,00"
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700">
-                                Stop-Loss (%)
-                              </label>
-                              <input
-                                type="text"
-                                value={inputValues.stop_loss_percent ?? (editForm.stop_loss_percent !== undefined ? formatNumber(editForm.stop_loss_percent, 2) : '')}
-                                onChange={(e) => {
-                                  setInputValues({ ...inputValues, stop_loss_percent: e.target.value });
-                                }}
-                                onBlur={(e) => {
-                                  const parsed = parseFormattedNumber(e.target.value);
-                                  setEditForm({
-                                    ...editForm,
-                                    stop_loss_percent: parsed,
-                                  });
-                                  if (parsed !== undefined) {
-                                    setInputValues({ ...inputValues, stop_loss_percent: formatNumber(parsed, 2) });
-                                  }
-                                }}
-                                placeholder="0,00"
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
-                              />
-                            </div>
-                            <div>
-                              <label className="block text-sm font-medium text-gray-700">
-                                Take-Profit (%)
-                              </label>
-                              <input
-                                type="text"
-                                value={inputValues.take_profit_percent ?? (editForm.take_profit_percent !== undefined ? formatNumber(editForm.take_profit_percent, 2) : '')}
-                                onChange={(e) => {
-                                  setInputValues({ ...inputValues, take_profit_percent: e.target.value });
-                                }}
-                                onBlur={(e) => {
-                                  const parsed = parseFormattedNumber(e.target.value);
-                                  setEditForm({
-                                    ...editForm,
-                                    take_profit_percent: parsed,
-                                  });
-                                  if (parsed !== undefined) {
-                                    setInputValues({ ...inputValues, take_profit_percent: formatNumber(parsed, 2) });
-                                  }
-                                }}
-                                placeholder="0,00"
-                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
-                              />
-                            </div>
-                          </div>
-
-                          {/* Trailing Stop Loss */}
-                          <div className="mt-4 border-t border-gray-200 pt-4">
-                            <h4 className="text-sm font-medium text-gray-900 mb-3">
-                              Trailing Stop Loss
-                            </h4>
-                            <div className="flex items-center">
-                              <input
-                                type="checkbox"
-                                id={`trailing-stop-${coin.symbol}`}
-                                checked={editForm.use_trailing_stop || false}
-                                onChange={(e) =>
-                                  setEditForm({
-                                    ...editForm,
-                                    use_trailing_stop: e.target.checked,
-                                    // Aktivierungsschwelle wird immer auf 0 gesetzt (nicht mehr verwendet)
-                                    trailing_stop_activation_threshold: 0
-                                  })
+                      {/* Settings */}
+                      <div className="border-t border-gray-200 pt-4">
+                        <h4 className="text-sm font-medium text-gray-900 mb-3">
+                          Signal-Einstellungen
+                        </h4>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700">
+                              Signal Threshold (%)
+                            </label>
+                            <input
+                              type="text"
+                              value={inputValues.signal_threshold_percent ?? (editForm.signal_threshold_percent !== undefined ? formatNumber(editForm.signal_threshold_percent, 3) : '')}
+                              onChange={(e) => {
+                                setInputValues({ ...inputValues, signal_threshold_percent: e.target.value });
+                              }}
+                              onBlur={(e) => {
+                                const parsed = parseFormattedNumber(e.target.value);
+                                setEditForm({
+                                  ...editForm,
+                                  signal_threshold_percent: parsed,
+                                });
+                                if (parsed !== undefined) {
+                                  setInputValues({ ...inputValues, signal_threshold_percent: formatNumber(parsed, 3) });
                                 }
-                                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                              />
-                              <label
-                                htmlFor={`trailing-stop-${coin.symbol}`}
-                                className="ml-2 block text-sm text-gray-900"
-                              >
-                                Trailing Stop Loss aktivieren
-                              </label>
-                            </div>
-                            {editForm.use_trailing_stop && (
-                              <div className="mt-2 p-3 bg-purple-50 rounded border border-purple-200">
-                                <p className="text-xs text-purple-700">
-                                  <strong>ℹ️ Trailing Stop Loss:</strong><br/>
-                                  • Sofort aktiv beim Kauf<br/>
-                                  • Folgt automatisch dem höchsten Preis<br/>
-                                  • Verkauf bei: Höchster Preis - Stop Loss %
-                                </p>
-                              </div>
-                            )}
+                              }}
+                              placeholder="0,000"
+                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
+                            />
                           </div>
-                        </div>
-
-                        <div className="flex space-x-3">
-                          <button
-                            onClick={() => handleSaveEdit(coin.symbol)}
-                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                          >
-                            Speichern
-                          </button>
-                          <button
-                            onClick={handleCancelEdit}
-                            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                          >
-                            Abbrechen
-                          </button>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700">
+                              Signal Cooldown (ms)
+                            </label>
+                            <input
+                              type="text"
+                              value={inputValues.signal_cooldown_ms ?? (editForm.signal_cooldown_ms !== undefined ? formatNumber(editForm.signal_cooldown_ms, 0) : '')}
+                              onChange={(e) => {
+                                setInputValues({ ...inputValues, signal_cooldown_ms: e.target.value });
+                              }}
+                              onBlur={(e) => {
+                                const parsed = parseFormattedNumber(e.target.value);
+                                const value = parsed ? Math.floor(parsed) : undefined;
+                                setEditForm({
+                                  ...editForm,
+                                  signal_cooldown_ms: value,
+                                });
+                                if (value !== undefined) {
+                                  setInputValues({ ...inputValues, signal_cooldown_ms: formatNumber(value, 0) });
+                                }
+                              }}
+                              placeholder="0"
+                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700">
+                              Trade Cooldown (ms)
+                            </label>
+                            <input
+                              type="text"
+                              value={inputValues.trade_cooldown_ms ?? (editForm.trade_cooldown_ms !== undefined ? formatNumber(editForm.trade_cooldown_ms, 0) : '')}
+                              onChange={(e) => {
+                                setInputValues({ ...inputValues, trade_cooldown_ms: e.target.value });
+                              }}
+                              onBlur={(e) => {
+                                const parsed = parseFormattedNumber(e.target.value);
+                                const value = parsed ? Math.floor(parsed) : undefined;
+                                setEditForm({
+                                  ...editForm,
+                                  trade_cooldown_ms: value,
+                                });
+                                if (value !== undefined) {
+                                  setInputValues({ ...inputValues, trade_cooldown_ms: formatNumber(value, 0) });
+                                }
+                              }}
+                              placeholder="0"
+                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
+                            />
+                            <p className="mt-1 text-xs text-gray-500">Pause zwischen Trades für diesen Coin (pro Coin individuell)</p>
+                          </div>
                         </div>
                       </div>
-                    ) : (
-                      <div className="mt-4">
+
+                      {/* Risk Management */}
+                      <div className="border-t border-gray-200 pt-4">
+                        <h4 className="text-sm font-medium text-gray-900 mb-3">
+                          Risk Management
+                        </h4>
+                        <div className="grid grid-cols-2 gap-4">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700">
+                              Trade Size (USDT)
+                            </label>
+                            <input
+                              type="text"
+                              value={inputValues.max_trade_size_usdt ?? (editForm.max_trade_size_usdt !== undefined ? formatNumber(editForm.max_trade_size_usdt, 2) : '')}
+                              onChange={(e) => {
+                                setInputValues({ ...inputValues, max_trade_size_usdt: e.target.value });
+                              }}
+                              onBlur={(e) => {
+                                const parsed = parseFormattedNumber(e.target.value);
+                                setEditForm({
+                                  ...editForm,
+                                  max_trade_size_usdt: parsed,
+                                });
+                                if (parsed !== undefined) {
+                                  setInputValues({ ...inputValues, max_trade_size_usdt: formatNumber(parsed, 2) });
+                                }
+                              }}
+                              placeholder="0,00"
+                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700">
+                              Stop-Loss (%)
+                            </label>
+                            <input
+                              type="text"
+                              value={inputValues.stop_loss_percent ?? (editForm.stop_loss_percent !== undefined ? formatNumber(editForm.stop_loss_percent, 2) : '')}
+                              onChange={(e) => {
+                                setInputValues({ ...inputValues, stop_loss_percent: e.target.value });
+                              }}
+                              onBlur={(e) => {
+                                const parsed = parseFormattedNumber(e.target.value);
+                                setEditForm({
+                                  ...editForm,
+                                  stop_loss_percent: parsed,
+                                });
+                                if (parsed !== undefined) {
+                                  setInputValues({ ...inputValues, stop_loss_percent: formatNumber(parsed, 2) });
+                                }
+                              }}
+                              placeholder="0,00"
+                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700">
+                              Take-Profit (%)
+                            </label>
+                            <input
+                              type="text"
+                              value={inputValues.take_profit_percent ?? (editForm.take_profit_percent !== undefined ? formatNumber(editForm.take_profit_percent, 2) : '')}
+                              onChange={(e) => {
+                                setInputValues({ ...inputValues, take_profit_percent: e.target.value });
+                              }}
+                              onBlur={(e) => {
+                                const parsed = parseFormattedNumber(e.target.value);
+                                setEditForm({
+                                  ...editForm,
+                                  take_profit_percent: parsed,
+                                });
+                                if (parsed !== undefined) {
+                                  setInputValues({ ...inputValues, take_profit_percent: formatNumber(parsed, 2) });
+                                }
+                              }}
+                              placeholder="0,00"
+                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Trailing Stop Loss */}
+                        <div className="mt-4 border-t border-gray-200 pt-4">
+                          <h4 className="text-sm font-medium text-gray-900 mb-3">
+                            Trailing Stop Loss
+                          </h4>
+                          <div className="flex items-center">
+                            <input
+                              type="checkbox"
+                              id={`trailing-stop-${coin.symbol}`}
+                              checked={editForm.use_trailing_stop || false}
+                              onChange={(e) =>
+                                setEditForm({
+                                  ...editForm,
+                                  use_trailing_stop: e.target.checked,
+                                  trailing_stop_activation_threshold: 0
+                                })
+                              }
+                              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                            />
+                            <label
+                              htmlFor={`trailing-stop-${coin.symbol}`}
+                              className="ml-2 block text-sm text-gray-900"
+                            >
+                              Trailing Stop Loss aktivieren
+                            </label>
+                          </div>
+                          {editForm.use_trailing_stop && (
+                            <div className="mt-2 p-3 bg-purple-50 rounded border border-purple-200">
+                              <p className="text-xs text-purple-700">
+                                <strong>ℹ️ Trailing Stop Loss:</strong><br/>
+                                • Sofort aktiv beim Kauf<br/>
+                                • Folgt automatisch dem höchsten Preis<br/>
+                                • Verkauf bei: Höchster Preis - Stop Loss %
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex space-x-3">
+                        <button
+                          onClick={() => handleSaveEdit(coin.symbol)}
+                          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                        >
+                          Speichern
+                        </button>
+                        <button
+                          onClick={handleCancelEdit}
+                          className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                        >
+                          Abbrechen
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-4 space-y-4">
+                      {/* Bot Config Übersicht */}
+                      <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
+                        <h4 className="text-sm font-semibold text-gray-700 mb-3">Bot-Konfiguration</h4>
                         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                           <div>
                             <span className="text-gray-500">Strategie:</span>
@@ -629,18 +819,32 @@ export default function CoinsPage() {
                             </span>
                           </div>
                         </div>
-                        <button
-                          onClick={() => handleStartEdit(coin)}
-                          className="mt-4 inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                        >
-                          Bearbeiten
-                        </button>
                       </div>
-                    )}
-                  </div>
-                </div>
-              </li>
-            );
+
+                      {/* Binance Exchange Info */}
+                      {binanceSymbolInfo ? (
+                        <>
+                          <CoinCoreInfo symbol={binanceSymbolInfo} />
+                          <CoinDetailsAccordion symbol={binanceSymbolInfo} />
+                        </>
+                      ) : (
+                        <div className="bg-yellow-50 border border-yellow-200 rounded-md p-3">
+                          <p className="text-sm text-yellow-700">
+                            ⚠️ Keine Binance Exchange-Informationen für {coin.symbol} verfügbar.
+                          </p>
+                        </div>
+                      )}
+
+                      <button
+                        onClick={() => handleStartEdit(coin)}
+                        className="mt-4 inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                      >
+                        Bearbeiten
+                      </button>
+                    </div>
+                  )}
+                </li>
+              );
             })
           )}
         </ul>
@@ -648,4 +852,3 @@ export default function CoinsPage() {
     </div>
   );
 }
-
