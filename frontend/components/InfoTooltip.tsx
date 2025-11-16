@@ -15,7 +15,7 @@ interface InfoTooltipProps {
 export default function InfoTooltip({ 
   content, 
   position = 'auto',
-  maxWidth = '300px' 
+  maxWidth = '450px' 
 }: InfoTooltipProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [tooltipPosition, setTooltipPosition] = useState(position);
@@ -50,7 +50,7 @@ export default function InfoTooltip({
   }, [isVisible, position]);
 
   const getTooltipClasses = () => {
-    const baseClasses = "absolute z-50 px-3 py-2 text-sm text-white bg-gray-900 rounded-lg shadow-lg whitespace-normal";
+    const baseClasses = "absolute z-50 px-4 py-3 text-sm leading-relaxed text-white bg-gray-900 rounded-lg shadow-xl whitespace-normal";
     
     switch (tooltipPosition) {
       case 'top':
