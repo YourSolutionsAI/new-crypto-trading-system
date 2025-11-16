@@ -6,6 +6,7 @@ const { createClient } = require('@supabase/supabase-js');
 const Binance = require('binance-api-node').default;
 const ccxt = require('ccxt');
 const axios = require('axios');
+const cron = require('node-cron');
 
 // Express-Server initialisieren
 const app = express();
@@ -1855,10 +1856,69 @@ app.post('/api/exchange-info/sync', async (req, res) => {
     
     console.log(`🎉 Sync completed: ${results.length} success, ${errors.length} errors`);
     
+    // ═══════════════════════════════════════════════════════════════
+    // AUTOMATISCHE LOT SIZE AKTUALISIERUNG
+    // ═══════════════════════════════════════════════════════════════
+    console.log('🔄 Aktualisiere Lot Sizes in bot_settings...');
+    let lotSizesUpdated = 0;
+    let lotSizeErrors = 0;
+    
+    for (const result of results) {
+      try {
+        const { symbol } = result;
+        
+        // Hole frisch synchronisierte Exchange-Info
+        const { data: exchangeInfo } = await supabase
+          .from('coin_exchange_info')
+          .select('min_qty, max_qty, step_size')
+          .eq('symbol', symbol)
+          .single();
+        
+        if (exchangeInfo) {
+          // Berechne decimals aus step_size
+          const stepSizeStr = exchangeInfo.step_size?.toString() || '1';
+          const decimals = stepSizeStr.includes('.') 
+            ? stepSizeStr.split('.')[1].length 
+            : 0;
+          
+          const lotSizeData = {
+            minQty: parseFloat(exchangeInfo.min_qty) || 0.1,
+            maxQty: parseFloat(exchangeInfo.max_qty) || 9000000,
+            stepSize: parseFloat(exchangeInfo.step_size) || 0.1,
+            decimals: decimals
+          };
+          
+          // Upsert in bot_settings
+          await supabase
+            .from('bot_settings')
+            .upsert({
+              key: `lot_size_${symbol}`,
+              value: lotSizeData,
+              description: `Lot Size Regeln für ${symbol} (auto-sync ${new Date().toISOString().split('T')[0]})`,
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'key' });
+          
+          lotSizesUpdated++;
+          console.log(`  ✅ Lot Size aktualisiert: ${symbol}`);
+        }
+      } catch (err) {
+        console.error(`  ⚠️  Fehler beim Aktualisieren von lot_size für ${result.symbol}:`, err.message);
+        lotSizeErrors++;
+        // Nicht den gesamten Sync abbrechen
+      }
+    }
+    
+    // Bot Settings neu laden, damit neue Werte verfügbar sind
+    if (lotSizesUpdated > 0) {
+      await loadBotSettings(true); // silent = true
+      console.log(`✅ Bot Settings neu geladen (${lotSizesUpdated} lot_sizes aktualisiert)`);
+    }
+    
     res.json({
       success: true,
       message: `Synchronisiert: ${results.length} von ${symbolsToSync.length} Symbolen`,
       synced: results.length,
+      lotSizesUpdated: lotSizesUpdated,
       errors: errors.length > 0 ? errors : undefined,
       timestamp: new Date().toISOString()
     });
@@ -5993,6 +6053,194 @@ function stopTradingBot() {
   console.log('✅ Trading-Bot wurde erfolgreich gestoppt');
 }
 
+// ═══════════════════════════════════════════════════════════════
+// SCHEDULED TASKS - AUTOMATISCHE SYNCHRONISIERUNG
+// ═══════════════════════════════════════════════════════════════
+
+/**
+ * Führt den Exchange-Info Sync automatisch aus (für Cron Job)
+ * Diese Funktion wird täglich um 3:00 Uhr UTC ausgeführt
+ */
+async function scheduledExchangeInfoSync() {
+  try {
+    console.log('');
+    console.log('═══════════════════════════════════════════════');
+    console.log('🕐 [SCHEDULED] Starting automatic Exchange-Info Sync...');
+    console.log('═══════════════════════════════════════════════');
+    
+    // Hole alle Symbole aus coin_strategies
+    const { data: coins, error: coinsError } = await supabase
+      .from('coin_strategies')
+      .select('symbol');
+    
+    if (coinsError) {
+      throw new Error(`Fehler beim Laden der Coins: ${coinsError.message}`);
+    }
+    
+    if (!coins || coins.length === 0) {
+      console.log('⚠️  [SCHEDULED] Keine Coins in coin_strategies - Sync übersprungen');
+      return;
+    }
+    
+    const symbols = coins.map(c => c.symbol);
+    console.log(`📊 [SCHEDULED] Synchronisiere ${symbols.length} Symbole...`);
+    
+    // Führe Binance API Call aus
+    const response = await axios.get('https://api.binance.com/api/v3/exchangeInfo');
+    const data = response.data;
+    
+    // Rate Limits speichern
+    if (data.rateLimits && Array.isArray(data.rateLimits)) {
+      for (const limit of data.rateLimits) {
+        await supabase
+          .from('binance_rate_limits')
+          .upsert({
+            rate_limit_type: limit.rateLimitType,
+            interval: limit.interval,
+            interval_num: limit.intervalNum,
+            limit_value: limit.limit,
+            last_updated_at: new Date().toISOString()
+          }, {
+            onConflict: 'rate_limit_type,interval,interval_num',
+            ignoreDuplicates: false
+          });
+      }
+      console.log(`✅ [SCHEDULED] ${data.rateLimits.length} Rate Limits gespeichert`);
+    }
+    
+    let synced = 0;
+    let errors = 0;
+    
+    // Sync jedes Symbol
+    for (const symbol of symbols) {
+      try {
+        const binanceSymbol = data.symbols.find(s => s.symbol === symbol);
+        
+        if (!binanceSymbol) {
+          console.log(`  ⚠️  ${symbol} nicht auf Binance gefunden`);
+          errors++;
+          continue;
+        }
+        
+        // Testnet-Verfügbarkeit prüfen
+        let inTestnetAvailable = null;
+        try {
+          const testnetResponse = await axios.get('https://testnet.binance.vision/api/v3/exchangeInfo');
+          const testnetSymbol = testnetResponse.data.symbols?.find(s => s.symbol === symbol);
+          inTestnetAvailable = !!testnetSymbol;
+        } catch (testnetError) {
+          console.log(`  ⚠️  Testnet-Check für ${symbol} fehlgeschlagen (wird übersprungen)`);
+        }
+        
+        // Filter extrahieren
+        const priceFilter = binanceSymbol.filters.find(f => f.filterType === 'PRICE_FILTER');
+        const lotSizeFilter = binanceSymbol.filters.find(f => f.filterType === 'LOT_SIZE');
+        const notionalFilter = binanceSymbol.filters.find(f => f.filterType === 'NOTIONAL');
+        
+        // Exchange-Info aktualisieren
+        const exchangeInfoData = {
+          symbol: binanceSymbol.symbol,
+          status: binanceSymbol.status,
+          is_spot_trading_allowed: binanceSymbol.isSpotTradingAllowed,
+          is_margin_trading_allowed: binanceSymbol.isMarginTradingAllowed,
+          quote_order_qty_market_allowed: binanceSymbol.quoteOrderQtyMarketAllowed,
+          allow_trailing_stop: binanceSymbol.allowTrailingStop,
+          base_asset: binanceSymbol.baseAsset,
+          quote_asset: binanceSymbol.quoteAsset,
+          base_asset_precision: binanceSymbol.baseAssetPrecision,
+          quote_asset_precision: binanceSymbol.quoteAssetPrecision,
+          quote_precision: binanceSymbol.quotePrecision,
+          base_commission_precision: binanceSymbol.baseCommissionPrecision,
+          quote_commission_precision: binanceSymbol.quoteCommissionPrecision,
+          order_types: binanceSymbol.orderTypes,
+          iceberg_allowed: binanceSymbol.icebergAllowed,
+          oco_allowed: binanceSymbol.ocoAllowed,
+          oto_allowed: binanceSymbol.otoAllowed,
+          cancel_replace_allowed: binanceSymbol.cancelReplaceAllowed,
+          amend_allowed: binanceSymbol.amendAllowed,
+          peg_instructions_allowed: binanceSymbol.pegInstructionsAllowed || false,
+          default_self_trade_prevention_mode: binanceSymbol.defaultSelfTradePreventionMode || 'NONE',
+          allowed_self_trade_prevention_modes: binanceSymbol.allowedSelfTradePreventionModes || [],
+          min_price: priceFilter?.minPrice || null,
+          max_price: priceFilter?.maxPrice || null,
+          tick_size: priceFilter?.tickSize || null,
+          min_qty: lotSizeFilter?.minQty || null,
+          max_qty: lotSizeFilter?.maxQty || null,
+          step_size: lotSizeFilter?.stepSize || null,
+          min_notional: notionalFilter?.minNotional || null,
+          max_notional: notionalFilter?.maxNotional || null,
+          apply_min_to_market: notionalFilter?.applyMinToMarket || false,
+          filters: binanceSymbol.filters,
+          permissions: binanceSymbol.permissions,
+          permission_sets: binanceSymbol.permissionSets || null,
+          in_testnet_available: inTestnetAvailable,
+          last_updated_at: new Date().toISOString()
+        };
+        
+        await supabase
+          .from('coin_exchange_info')
+          .upsert(exchangeInfoData, { 
+            onConflict: 'symbol',
+            returning: 'minimal'
+          });
+        
+        // Lot Size auch aktualisieren
+        const stepSizeStr = lotSizeFilter?.stepSize?.toString() || '1';
+        const decimals = stepSizeStr.includes('.') ? stepSizeStr.split('.')[1].length : 0;
+        
+        const lotSizeData = {
+          minQty: parseFloat(lotSizeFilter?.minQty) || 0.1,
+          maxQty: parseFloat(lotSizeFilter?.maxQty) || 9000000,
+          stepSize: parseFloat(lotSizeFilter?.stepSize) || 0.1,
+          decimals: decimals
+        };
+        
+        await supabase
+          .from('bot_settings')
+          .upsert({
+            key: `lot_size_${symbol}`,
+            value: lotSizeData,
+            description: `Lot Size Regeln für ${symbol} (auto-sync ${new Date().toISOString().split('T')[0]})`,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'key' });
+        
+        synced++;
+        console.log(`  ✅ ${symbol} synced${inTestnetAvailable !== null ? ` (Testnet: ${inTestnetAvailable ? '✓' : '✗'})` : ''}`);
+        
+      } catch (err) {
+        console.error(`  ❌ Error syncing ${symbol}:`, err.message);
+        errors++;
+      }
+    }
+    
+    // Bot Settings neu laden
+    await loadBotSettings(true);
+    
+    console.log('═══════════════════════════════════════════════');
+    console.log(`✅ [SCHEDULED] Sync completed: ${synced} success, ${errors} errors`);
+    console.log('═══════════════════════════════════════════════');
+    console.log('');
+    
+    // Log in Supabase speichern
+    await logBotEvent('info', 'Scheduled Exchange-Info Sync completed', {
+      synced,
+      errors,
+      symbols: symbols.length,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('═══════════════════════════════════════════════');
+    console.error('❌ [SCHEDULED] Exchange-Info Sync failed:', error.message);
+    console.error('═══════════════════════════════════════════════');
+    
+    await logBotEvent('error', 'Scheduled Exchange-Info Sync failed', {
+      error: error.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+}
+
 // Server starten
 const PORT = process.env.PORT || 10000;
 const HOST = '0.0.0.0';  // Wichtig für Render-Deployment
@@ -6063,5 +6311,22 @@ app.listen(PORT, HOST, () => {
       }
     }, 10 * 60 * 1000); // Alle 10 Minuten
   }, 60000); // Starte nach 1 Minute
+  
+  // ═══════════════════════════════════════════════════════════════
+  // CRON JOB: TÄGLICHE EXCHANGE-INFO SYNCHRONISIERUNG
+  // ═══════════════════════════════════════════════════════════════
+  
+  // Cron Job konfigurieren - Täglich um 3:00 Uhr UTC
+  cron.schedule('0 3 * * *', () => {
+    console.log('🕐 [CRON] Triggering scheduled Exchange-Info Sync (03:00 UTC)...');
+    scheduledExchangeInfoSync();
+  }, {
+    scheduled: true,
+    timezone: "UTC"
+  });
+  
+  console.log('✅ Scheduled tasks configured:');
+  console.log('   📅 Exchange-Info Sync @ 03:00 UTC daily');
+  console.log('');
 });
 
