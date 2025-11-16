@@ -4849,16 +4849,6 @@ async function createWebSocketConnection(symbol, strategies) {
                 pendingSellSignals.delete(positionKey);
               }
             }
-            
-            // Setze State für MA Cross Signale
-            if (signal.exitReason === 'ma_cross') {
-              const positionKey = `${strategy.id}_${symbol}`;
-              pendingSellSignals.set(positionKey, {
-                timestamp: Date.now(),
-                reason: 'MA Cross Signal',
-                exitReason: 'ma_cross'
-              });
-            }
           }
           
           // Signal-Cooldown prüfen (pro Symbol, aus Strategie-Config)
