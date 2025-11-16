@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { getTrades, getPositions, getTradeStats } from '@/lib/api';
 import type { Trade, Position } from '@/lib/types';
 import { format } from 'date-fns';
@@ -36,6 +36,7 @@ export default function TradesPage() {
   const [loading, setLoading] = useState(true);
   const [currentPage, setCurrentPage] = useState(1);
   const [totalTrades, setTotalTrades] = useState(0);
+  const [currentTime, setCurrentTime] = useState(Date.now());
 
   const loadData = async () => {
     try {
@@ -61,6 +62,36 @@ export default function TradesPage() {
     const interval = setInterval(loadData, 5000); // Alle 5 Sekunden aktualisieren
     return () => clearInterval(interval);
   }, [currentPage]); // currentPage als Dependency
+
+  // Timer für Cooldown-Anzeige (aktualisiert jede Sekunde)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  // Berechne aktualisierte Cooldown-Zeiten für Positionen
+  const positionsWithCooldown = useMemo(() => {
+    return positions.map(position => {
+      if (!position.lastTradeTime || !position.tradeCooldownMs || position.tradeCooldownMs === 0) {
+        return { ...position, cooldownRemainingSeconds: 0, cooldownRemainingMinutes: 0 };
+      }
+      
+      const lastTradeTime = new Date(position.lastTradeTime).getTime();
+      const elapsed = currentTime - lastTradeTime;
+      const remainingMs = Math.max(0, position.tradeCooldownMs - elapsed);
+      const remainingSeconds = Math.floor(remainingMs / 1000);
+      const remainingMinutes = Math.floor(remainingMs / 60000);
+      
+      return {
+        ...position,
+        cooldownRemainingSeconds: remainingSeconds,
+        cooldownRemainingMinutes: remainingMinutes,
+        cooldownRemainingMs: remainingMs
+      };
+    });
+  }, [positions, currentTime]);
 
   const totalPages = Math.ceil(totalTrades / ITEMS_PER_PAGE);
 
@@ -212,7 +243,7 @@ export default function TradesPage() {
         ) : (
           <div className="bg-white shadow overflow-hidden sm:rounded-md">
             <ul className="divide-y divide-gray-200">
-              {positions.map((position) => (
+              {positionsWithCooldown.map((position) => (
                 <li key={position.symbol} className="px-6 py-4">
                   <div className="flex items-center justify-between">
                     <div className="flex-1">
@@ -247,6 +278,28 @@ export default function TradesPage() {
                         </div>
                       </div>
                       
+                      {/* Cooldown Anzeige */}
+                      {position.tradeCooldownMs && position.tradeCooldownMs > 0 && position.lastTradeTime && (
+                        <div className="mt-3 pt-3 border-t border-gray-200">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs text-gray-500">Trade Cooldown:</span>
+                            {position.cooldownRemainingSeconds && position.cooldownRemainingSeconds > 0 ? (
+                              <div className="flex items-center gap-2">
+                                <span className="text-xs font-semibold text-orange-600">
+                                  {position.cooldownRemainingMinutes > 0 
+                                    ? `${position.cooldownRemainingMinutes}m ${position.cooldownRemainingSeconds % 60}s`
+                                    : `${position.cooldownRemainingSeconds}s`
+                                  }
+                                </span>
+                                <span className="text-xs text-gray-400">verbleibend</span>
+                              </div>
+                            ) : (
+                              <span className="text-xs font-semibold text-green-600">✓ Bereit</span>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
                       {/* Verkaufsinformationen */}
                       <div className="mt-4 pt-4 border-t border-gray-200">
                         <p className="text-xs font-semibold text-gray-700 mb-2">Verkaufsbedingungen:</p>

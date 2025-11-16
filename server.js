@@ -1693,6 +1693,16 @@ app.get('/api/positions', async (req, res) => {
         }
       }
       
+      // Berechne Trade Cooldown Information
+      const now = Date.now();
+      const tradeCooldownMs = fullStrategyConfig?.settings?.trade_cooldown_ms || 0;
+      const lastTradeTime = lastTradeTimes.get(position.symbol) || 0;
+      const cooldownRemainingMs = tradeCooldownMs > 0 && lastTradeTime > 0
+        ? Math.max(0, tradeCooldownMs - (now - lastTradeTime))
+        : 0;
+      const cooldownRemainingSeconds = Math.round(cooldownRemainingMs / 1000);
+      const cooldownRemainingMinutes = Math.round(cooldownRemainingMs / 60000);
+      
       allPositions.push({
         id: position.id,
         symbol: position.symbol,
@@ -1710,7 +1720,13 @@ app.get('/api/positions', async (req, res) => {
         maCrossSellPrice: maCrossSellPrice,
         stopLossPrice: stopLossPrice,
         trailingStopPrice: trailingStopPrice,
-        useTrailingStop: useTrailingStop
+        useTrailingStop: useTrailingStop,
+        // Cooldown Information
+        tradeCooldownMs: tradeCooldownMs,
+        cooldownRemainingMs: cooldownRemainingMs,
+        cooldownRemainingSeconds: cooldownRemainingSeconds,
+        cooldownRemainingMinutes: cooldownRemainingMinutes,
+        lastTradeTime: lastTradeTime > 0 ? new Date(lastTradeTime).toISOString() : null
       });
       
       console.log(`📍 Position #${position.id} gefunden: ${position.symbol} | Strategie: ${strategyName} | Menge: ${quantity} | Entry: ${entryPrice} | Aktuell: ${currentPrice.toFixed(8)}`);

@@ -161,6 +161,12 @@ export const getPositions = async (): Promise<Position[]> => {
       stopLossPrice: pos.stopLossPrice ?? null,
       trailingStopPrice: pos.trailingStopPrice ?? null,
       useTrailingStop: pos.useTrailingStop ?? false,
+      // Cooldown Information
+      tradeCooldownMs: pos.tradeCooldownMs ?? 0,
+      cooldownRemainingMs: pos.cooldownRemainingMs ?? 0,
+      cooldownRemainingSeconds: pos.cooldownRemainingSeconds ?? 0,
+      cooldownRemainingMinutes: pos.cooldownRemainingMinutes ?? 0,
+      lastTradeTime: pos.lastTradeTime ?? null,
     }));
   } catch (error) {
     console.error('Fehler beim Laden der Positionen:', error);

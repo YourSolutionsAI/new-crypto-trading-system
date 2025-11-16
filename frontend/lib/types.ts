@@ -39,6 +39,12 @@ export interface Position {
   stopLossPrice?: number | null;
   trailingStopPrice?: number | null;
   useTrailingStop?: boolean;
+  // Cooldown Information
+  tradeCooldownMs?: number;
+  cooldownRemainingMs?: number;
+  cooldownRemainingSeconds?: number;
+  cooldownRemainingMinutes?: number;
+  lastTradeTime?: string | null;
 }
 
 // Basis-Strategie (OHNE Coin-Zuordnung, nur Indikatoren)
