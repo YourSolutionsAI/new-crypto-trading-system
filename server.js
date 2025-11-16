@@ -2414,20 +2414,38 @@ app.get('/api/positions', async (req, res) => {
     
     console.log(`📊 ${positions?.length || 0} offene Positionen gefunden`);
     
+    // OPTIMIERUNG: Hole alle Binance-Preise PARALLEL statt sequenziell
+    const priceMap = new Map();
+    if (binanceClient && positions && positions.length > 0) {
+      try {
+        // Erstelle parallele Promises für alle Symbole
+        const pricePromises = positions.map(position => 
+          binanceClient.prices({ symbol: position.symbol })
+            .then(ticker => ({ symbol: position.symbol, price: parseFloat(ticker[position.symbol]) }))
+            .catch(err => {
+              console.warn(`⚠️  Konnte aktuellen Preis für ${position.symbol} nicht laden:`, err.message);
+              return { symbol: position.symbol, price: parseFloat(position.entry_price) };
+            })
+        );
+        
+        // Warte auf alle Preis-Abfragen gleichzeitig
+        const prices = await Promise.all(pricePromises);
+        
+        // Speichere Preise in Map für schnellen Zugriff
+        prices.forEach(({ symbol, price }) => {
+          priceMap.set(symbol, price);
+        });
+      } catch (error) {
+        console.warn('⚠️  Fehler beim parallelen Laden der Preise:', error.message);
+      }
+    }
+    
     const allPositions = [];
     
-    // Bearbeite jede Position
+    // Bearbeite jede Position (Preise sind bereits geladen)
     for (const position of (positions || [])) {
-      // Hole aktuellen Preis von Binance (falls verfügbar)
-      let currentPrice = position.entry_price; // Fallback
-      try {
-        if (binanceClient && position.symbol) {
-          const ticker = await binanceClient.prices({ symbol: position.symbol });
-          currentPrice = parseFloat(ticker[position.symbol]) || position.entry_price;
-        }
-      } catch (error) {
-        console.warn(`⚠️  Konnte aktuellen Preis für ${position.symbol} nicht laden:`, error.message);
-      }
+      // Hole Preis aus Map (bereits parallel geladen)
+      const currentPrice = priceMap.get(position.symbol) || parseFloat(position.entry_price);
       
       const quantity = parseFloat(position.quantity);
       const entryPrice = parseFloat(position.entry_price);
@@ -3842,38 +3860,10 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
       // SCHRITT 4: Prüfe ob Trailing Stop ausgelöst wurde (Verkauf)
       // WICHTIG: Nur prüfen wenn trailing_stop_price bereits gesetzt ist
       
-      // DEBUG: Logge alle relevanten Werte für Diagnose
-      console.log(`🔍 [${symbol}] Trailing Stop Debug:`, {
-        useTrailingStop: useTrailingStop,
-        stopLossPercent: stopLossPercent,
-        trailingStopPrice: trailingStopPrice,
-        trailingStopPriceType: typeof trailingStopPrice,
-        currentPrice: currentPrice,
-        currentPriceType: typeof currentPrice,
-        highestPrice: highestPrice,
-        entryPrice: entryPrice,
-        priceChangePercent: priceChangePercent.toFixed(4) + '%',
-        comparison: currentPrice <= trailingStopPrice,
-        isNull: trailingStopPrice === null,
-        isUndefined: trailingStopPrice === undefined,
-        isNaN: isNaN(trailingStopPrice),
-        difference: trailingStopPrice !== null && trailingStopPrice !== undefined && !isNaN(trailingStopPrice) 
-          ? (currentPrice - trailingStopPrice).toFixed(8) 
-          : 'N/A'
-      });
-      
       if (trailingStopPrice !== null && trailingStopPrice !== undefined && !isNaN(trailingStopPrice)) {
         // Verwende kleine Toleranz für Floating-Point-Vergleiche
         const tolerance = 0.00000001;
         const shouldSell = currentPrice <= (trailingStopPrice + tolerance);
-        
-        console.log(`🔍 [${symbol}] Trailing Stop Verkaufsprüfung:`, {
-          currentPrice: currentPrice.toFixed(8),
-          trailingStopPrice: trailingStopPrice.toFixed(8),
-          tolerance: tolerance,
-          comparison: `${currentPrice.toFixed(8)} <= ${(trailingStopPrice + tolerance).toFixed(8)}`,
-          shouldSell: shouldSell
-        });
         
         if (shouldSell) {
           const trailingPriceChangePercent = ((currentPrice - highestPrice) / highestPrice) * 100;
@@ -3945,35 +3935,8 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
           }
 
           continue; // Überspringe Take-Profit Prüfung
-        } else {
-          // DEBUG: Warum wird nicht verkauft?
-          const diff = currentPrice - trailingStopPrice;
-          console.log(`⚠️  [${symbol}] Trailing Stop NICHT ausgelöst:`, {
-            currentPrice: currentPrice.toFixed(8),
-            trailingStopPrice: trailingStopPrice.toFixed(8),
-            difference: diff.toFixed(8),
-            differencePercent: ((diff / trailingStopPrice) * 100).toFixed(6) + '%',
-            reason: diff > 0 ? 'Preis liegt ÜBER Trailing Stop' : 'Unbekannter Grund'
-          });
         }
-      } else {
-        // DEBUG: Trailing Stop Price ist nicht gesetzt
-        console.log(`⚠️  [${symbol}] Trailing Stop Price ist nicht gesetzt:`, {
-          trailingStopPrice: trailingStopPrice,
-          isNull: trailingStopPrice === null,
-          isUndefined: trailingStopPrice === undefined,
-          isNaN: isNaN(trailingStopPrice),
-          useTrailingStop: useTrailingStop,
-          stopLossPercent: stopLossPercent
-        });
       }
-    } else {
-      // DEBUG: Trailing Stop ist nicht aktiviert
-      console.log(`⚠️  [${symbol}] Trailing Stop ist nicht aktiviert:`, {
-        useTrailingStop: useTrailingStop,
-        stopLossPercent: stopLossPercent,
-        reason: !useTrailingStop ? 'useTrailingStop ist false' : 'stopLossPercent ist 0'
-      });
     }
 
     // ═══════════════════════════════════════════════════════════════

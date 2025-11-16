@@ -20,7 +20,7 @@ const api = axios.create({
   headers: {
     'Content-Type': 'application/json',
   },
-  timeout: 10000, // 10 Sekunden Timeout
+  timeout: 60000, // 60 Sekunden Timeout (erhöht wegen Backend-Verarbeitung mit mehreren API-Calls)
 });
 
 // Error Handler
