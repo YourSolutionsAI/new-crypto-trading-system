@@ -303,19 +303,6 @@ export default function TradesPage() {
                       {/* Verkaufsinformationen */}
                       <div className="mt-4 pt-4 border-t border-gray-200">
                         <p className="text-xs font-semibold text-gray-700 mb-2">Verkaufsbedingungen:</p>
-                        
-                        {/* DEBUG für BTCUSDT */}
-                        {position.symbol === 'BTCUSDT' && (() => {
-                          console.log('🔍 Frontend BTCUSDT:', {
-                            useTrailingStop: position.useTrailingStop,
-                            takeProfitPrice: position.takeProfitPrice,
-                            stopLossPrice: position.stopLossPrice,
-                            condition_tsl: !position.useTrailingStop,
-                            condition_tp: position.takeProfitPrice
-                          });
-                          return null;
-                        })()}
-                        
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
                           {/* Stop Loss oder Trailing Stop Loss */}
                           {(position.stopLossPrice || position.trailingStopPrice) && (

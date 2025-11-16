@@ -1657,23 +1657,9 @@ app.get('/api/positions', async (req, res) => {
               settings: coinConfig.settings || {},
               risk: coinConfig.risk || {}
             };
-            
-            // DEBUG: Logge Config für BTCUSDT
-            if (position.symbol === 'BTCUSDT') {
-              console.log(`🔍 DEBUG Config für ${position.symbol}:`, {
-                baseConfig: baseConfig.risk,
-                coinConfig_risk: coinConfig.risk,
-                merged_risk: fullStrategyConfig.risk,
-                take_profit_percent: fullStrategyConfig.risk?.take_profit_percent
-              });
-            }
           } else {
             // Fallback: Nur Basis-Strategie Config
             fullStrategyConfig = baseStrategy.config || {};
-            
-            if (position.symbol === 'BTCUSDT') {
-              console.log(`⚠️ Keine coin_strategies gefunden für ${position.symbol}, verwende Fallback`);
-            }
           }
           
           // Hole Preis-Historie für MA-Berechnung
@@ -1729,16 +1715,6 @@ app.get('/api/positions', async (req, res) => {
             const takeProfitPercent = fullStrategyConfig.risk.take_profit_percent ?? 0;
             useTrailingStop = fullStrategyConfig.risk.use_trailing_stop === true;
             
-            // DEBUG: Logge Take Profit Config
-            if (position.symbol === 'BTCUSDT') {
-              console.log(`🔍 DEBUG Take Profit für ${position.symbol}:`, {
-                takeProfitPercent,
-                useTrailingStop,
-                entryPrice,
-                willCalculate: !useTrailingStop && takeProfitPercent > 0
-              });
-            }
-            
             // Stop Loss / Trailing Stop Loss
             if (stopLossPercent > 0) {
               if (useTrailingStop) {
@@ -1764,13 +1740,6 @@ app.get('/api/positions', async (req, res) => {
             // Take Profit (nur wenn TSL nicht aktiv)
             if (!useTrailingStop && takeProfitPercent > 0) {
               takeProfitPrice = entryPrice * (1 + takeProfitPercent / 100);
-              
-              // DEBUG: Logge berechneten Take Profit
-              if (position.symbol === 'BTCUSDT') {
-                console.log(`✅ Take Profit berechnet für ${position.symbol}: ${takeProfitPrice.toFixed(8)} USDT`);
-              }
-            } else if (position.symbol === 'BTCUSDT') {
-              console.log(`❌ Take Profit NICHT berechnet für ${position.symbol}: useTrailingStop=${useTrailingStop}, takeProfitPercent=${takeProfitPercent}`);
             }
           }
         } catch (configError) {
@@ -1787,16 +1756,6 @@ app.get('/api/positions', async (req, res) => {
         : 0;
       const cooldownRemainingSeconds = Math.round(cooldownRemainingMs / 1000);
       const cooldownRemainingMinutes = Math.round(cooldownRemainingMs / 60000);
-      
-      // DEBUG: Zeige was ins Response-Objekt kommt
-      if (position.symbol === 'BTCUSDT') {
-        console.log(`📤 Response für ${position.symbol}:`, {
-          stopLossPrice,
-          takeProfitPrice,
-          trailingStopPrice,
-          useTrailingStop
-        });
-      }
       
       allPositions.push({
         id: position.id,
