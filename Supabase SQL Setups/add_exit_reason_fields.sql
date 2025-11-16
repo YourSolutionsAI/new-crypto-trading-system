@@ -54,53 +54,94 @@ END $$;
 -- 3. MIGRIERE BESTEHENDE DATEN (OPTIONAL)
 -- ================================================================
 -- Versuche exit_reason aus metadata zu extrahieren (falls vorhanden)
+-- WICHTIG: Nur ausführen wenn exit_reason Spalte existiert
 
-UPDATE trades t
-SET exit_reason = CASE
-  WHEN t.metadata->>'exit_reason' IS NOT NULL THEN t.metadata->>'exit_reason'
-  WHEN t.side = 'sell' AND t.metadata->'signal'->>'trailingStop' = 'true' THEN 'trailing_stop'
-  WHEN t.side = 'sell' AND t.metadata->'signal'->>'stopLoss' = 'true' THEN 'stop_loss'
-  WHEN t.side = 'sell' AND t.metadata->'signal'->>'takeProfit' = 'true' THEN 'take_profit'
-  WHEN t.side = 'sell' AND t.metadata->'signal'->>'reason' LIKE '%MA Cross%' THEN 'ma_cross'
-  WHEN t.side = 'sell' AND t.metadata->>'manual' = 'true' THEN 'manual'
-  WHEN t.side = 'sell' THEN 'other'
-  ELSE NULL
-END
-WHERE t.side = 'sell' AND t.exit_reason IS NULL;
+DO $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'trades' AND column_name = 'exit_reason'
+  ) THEN
+    UPDATE trades t
+    SET exit_reason = CASE
+      WHEN t.metadata->>'exit_reason' IS NOT NULL THEN t.metadata->>'exit_reason'
+      WHEN t.side = 'sell' AND t.metadata->'signal'->>'trailingStop' = 'true' THEN 'trailing_stop'
+      WHEN t.side = 'sell' AND t.metadata->'signal'->>'stopLoss' = 'true' THEN 'stop_loss'
+      WHEN t.side = 'sell' AND t.metadata->'signal'->>'takeProfit' = 'true' THEN 'take_profit'
+      WHEN t.side = 'sell' AND t.metadata->'signal'->>'reason' LIKE '%MA Cross%' THEN 'ma_cross'
+      WHEN t.side = 'sell' AND t.metadata->>'manual' = 'true' THEN 'manual'
+      WHEN t.side = 'sell' THEN 'other'
+      ELSE NULL
+    END
+    WHERE t.side = 'sell' AND t.exit_reason IS NULL;
+    
+    RAISE NOTICE 'Bestehende Trades wurden migriert';
+  ELSE
+    RAISE NOTICE 'exit_reason Spalte existiert nicht - Migration übersprungen';
+  END IF;
+END $$;
 
 -- 4. VERIFIZIERUNG
 -- ================================================================
--- Zeige Statistiken über Exit-Gründe
+-- Zeige Statistiken über Exit-Gründe (nur wenn Spalten existieren)
 
-SELECT 
-  'Migration erfolgreich!' as status,
-  COUNT(*) FILTER (WHERE close_reason IS NOT NULL) as positions_with_close_reason,
-  COUNT(*) FILTER (WHERE exit_reason IS NOT NULL) as trades_with_exit_reason
-FROM (
-  SELECT close_reason FROM positions WHERE status = 'closed'
-  UNION ALL
-  SELECT exit_reason FROM trades WHERE side = 'sell'
-) combined;
+DO $$
+DECLARE
+  v_close_reason_exists BOOLEAN;
+  v_exit_reason_exists BOOLEAN;
+BEGIN
+  -- Prüfe ob Spalten existieren
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'positions' AND column_name = 'close_reason'
+  ) INTO v_close_reason_exists;
+  
+  SELECT EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'trades' AND column_name = 'exit_reason'
+  ) INTO v_exit_reason_exists;
+  
+  -- Zeige Status
+  RAISE NOTICE '========================================';
+  RAISE NOTICE 'Migration Status:';
+  RAISE NOTICE 'close_reason existiert: %', v_close_reason_exists;
+  RAISE NOTICE 'exit_reason existiert: %', v_exit_reason_exists;
+  RAISE NOTICE '========================================';
+END $$;
 
--- Zeige Exit-Grund Verteilung für Trades
-SELECT 
-  exit_reason,
-  COUNT(*) as count,
-  ROUND(COUNT(*) * 100.0 / NULLIF(SUM(COUNT(*)) OVER (), 0), 2) as percentage
-FROM trades
-WHERE side = 'sell' AND exit_reason IS NOT NULL
-GROUP BY exit_reason
-ORDER BY count DESC;
+-- Zeige Close-Grund Verteilung für Positionen (nur wenn Spalte existiert)
+DO $$
+DECLARE
+  v_count INTEGER;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'positions' AND column_name = 'close_reason'
+  ) THEN
+    SELECT COUNT(*) INTO v_count
+    FROM positions
+    WHERE status = 'closed' AND close_reason IS NOT NULL;
+    
+    RAISE NOTICE 'Positionen mit close_reason: %', v_count;
+  END IF;
+END $$;
 
--- Zeige Close-Grund Verteilung für Positionen
-SELECT 
-  close_reason,
-  COUNT(*) as count,
-  ROUND(COUNT(*) * 100.0 / NULLIF(SUM(COUNT(*)) OVER (), 0), 2) as percentage
-FROM positions
-WHERE status = 'closed' AND close_reason IS NOT NULL
-GROUP BY close_reason
-ORDER BY count DESC;
+-- Zeige Exit-Grund Verteilung für Trades (nur wenn Spalte existiert)
+DO $$
+DECLARE
+  v_count INTEGER;
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM information_schema.columns 
+    WHERE table_name = 'trades' AND column_name = 'exit_reason'
+  ) THEN
+    SELECT COUNT(*) INTO v_count
+    FROM trades
+    WHERE side = 'sell' AND exit_reason IS NOT NULL;
+    
+    RAISE NOTICE 'Trades mit exit_reason: %', v_count;
+  END IF;
+END $$;
 
 -- ================================================================
 -- HINWEISE
