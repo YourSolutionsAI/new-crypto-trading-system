@@ -1,9 +1,13 @@
 // Intelligentes Symbol-Dropdown mit Search-Funktion
 import React, { useState, useMemo, useRef, useEffect } from 'react';
-import type { SpotUSDTSymbol } from '@/lib/binance-types';
 
 interface SymbolSearchDropdownProps {
-  symbols: SpotUSDTSymbol[];
+  symbols: Array<{
+    symbol: string;
+    baseAsset: string;
+    status: string;
+    minNotional?: number; // Optional: Min USDT für Trading
+  }>;
   value: string;
   onChange: (symbol: string) => void;
   disabled?: boolean;
@@ -172,17 +176,27 @@ export const SymbolSearchDropdown: React.FC<SymbolSearchDropdownProps> = ({
                       : 'text-gray-900 hover:bg-gray-50'
                   }`}
                 >
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <span className="font-medium">{symbol.symbol}</span>
-                      <span className="ml-2 text-xs text-gray-500">
-                        {symbol.baseAsset} / USDT
-                      </span>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex-1 min-w-0">
+                      <div>
+                        <span className="font-medium">{symbol.symbol}</span>
+                        <span className="ml-2 text-xs text-gray-500">
+                          {symbol.baseAsset} / USDT
+                        </span>
+                      </div>
+                      {/* Min Notional Info */}
+                      {symbol.minNotional !== undefined && symbol.minNotional > 0 && (
+                        <div className="mt-0.5">
+                          <span className="text-xs text-amber-600 font-medium">
+                            Min: {symbol.minNotional.toFixed(2)} USDT
+                          </span>
+                        </div>
+                      )}
                     </div>
                     
                     {/* Status Badge */}
                     <span
-                      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium ${
+                      className={`inline-flex items-center px-2 py-0.5 rounded text-xs font-medium shrink-0 ${
                         symbol.status === 'TRADING'
                           ? 'bg-green-100 text-green-800'
                           : 'bg-yellow-100 text-yellow-800'

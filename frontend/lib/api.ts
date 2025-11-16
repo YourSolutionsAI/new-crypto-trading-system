@@ -547,3 +547,37 @@ export const acknowledgeAllAlerts = async (options?: {
   }
 };
 
+/**
+ * Lädt alle handelbaren Symbole DIREKT von Binance (Live-Abfrage)
+ * Verwendet für das Dropdown beim Hinzufügen neuer Coins
+ * @returns Array mit allen Spot USDT Symbolen inkl. Min Notional
+ */
+export const getBinanceSymbols = async (): Promise<{
+  success: boolean;
+  symbols: Array<{
+    symbol: string;
+    baseAsset: string;
+    quoteAsset: string;
+    status: string;
+    minNotional: number;
+    tickSize: number;
+    stepSize: number;
+    orderTypes: string[];
+    isMarginTradingAllowed: boolean;
+  }>;
+  count: number;
+  timestamp: string;
+}> => {
+  try {
+    const response = await api.get('/api/binance/symbols');
+    return response.data;
+  } catch (error: any) {
+    console.error('Fehler beim Laden der Binance-Symbole:', error);
+    throw new Error(
+      error.response?.data?.message || 
+      error.message || 
+      'Fehler beim Laden der handelbaren Symbole'
+    );
+  }
+};
+

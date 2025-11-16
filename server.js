@@ -1793,6 +1793,77 @@ app.post('/api/exchange-info/sync', async (req, res) => {
 });
 
 /**
+ * Gibt alle handelbaren Symbole DIREKT von Binance zurück (Live-Abfrage)
+ * Verwendet für das Dropdown beim Hinzufügen neuer Coins
+ * GET /api/binance/symbols
+ */
+app.get('/api/binance/symbols', async (req, res) => {
+  try {
+    console.log('📡 Fetching symbols directly from Binance API...');
+    
+    // Direkt von Binance abfragen (Production API, nicht Testnet)
+    const response = await axios.get('https://api.binance.com/api/v3/exchangeInfo', { timeout: 10000 });
+    const exchangeInfo = response.data;
+    
+    console.log(`✅ Received ${exchangeInfo.symbols.length} symbols from Binance`);
+    
+    // Filtere nur Spot USDT Trading-Paare
+    const symbols = exchangeInfo.symbols
+      .filter(symbol => 
+        symbol.isSpotTradingAllowed === true &&
+        symbol.quoteAsset === 'USDT' &&
+        symbol.status === 'TRADING'
+      )
+      .map(symbol => {
+        // Finde MIN_NOTIONAL Filter
+        const minNotionalFilter = symbol.filters.find(f => f.filterType === 'MIN_NOTIONAL' || f.filterType === 'NOTIONAL');
+        const minNotional = minNotionalFilter?.minNotional || minNotionalFilter?.notional || '0';
+        
+        // Finde PRICE_FILTER
+        const priceFilter = symbol.filters.find(f => f.filterType === 'PRICE_FILTER');
+        const tickSize = priceFilter?.tickSize || '0';
+        
+        // Finde LOT_SIZE Filter
+        const lotSizeFilter = symbol.filters.find(f => f.filterType === 'LOT_SIZE');
+        const stepSize = lotSizeFilter?.stepSize || '0';
+        
+        return {
+          symbol: symbol.symbol,
+          baseAsset: symbol.baseAsset,
+          quoteAsset: symbol.quoteAsset,
+          status: symbol.status,
+          minNotional: parseFloat(minNotional),
+          tickSize: parseFloat(tickSize),
+          stepSize: parseFloat(stepSize),
+          orderTypes: symbol.orderTypes || [],
+          isMarginTradingAllowed: symbol.isMarginTradingAllowed || false
+        };
+      })
+      .sort((a, b) => a.symbol.localeCompare(b.symbol));
+    
+    console.log(`✅ Filtered to ${symbols.length} tradeable Spot USDT symbols`);
+    
+    res.json({
+      success: true,
+      symbols,
+      count: symbols.length,
+      timestamp: new Date().toISOString()
+    });
+    
+  } catch (error) {
+    console.error('❌ Error fetching Binance symbols:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Laden der Binance-Symbole',
+      error: error.message,
+      hint: error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED' 
+        ? 'Binance API nicht erreichbar. Prüfen Sie Ihre Internetverbindung.' 
+        : 'Unerwarteter Fehler beim Abrufen der Symbole'
+    });
+  }
+});
+
+/**
  * Gibt alle Alerts zurück (optional gefiltert)
  * GET /api/alerts?acknowledged=false&severity=critical&symbol=BTCUSDT
  */

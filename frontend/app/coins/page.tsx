@@ -6,6 +6,7 @@ import type { CoinStrategy, Strategy } from '@/lib/types';
 import type { BinanceSymbol } from '@/lib/binance-types';
 import { formatNumber, parseFormattedNumber } from '@/lib/numberFormat';
 import { useExchangeInfo } from '@/hooks/useExchangeInfo';
+import { useBinanceSymbols } from '@/hooks/useBinanceSymbols';
 import { useRateLimits } from '@/hooks/useRateLimits';
 import type { RateLimit } from '@/hooks/useRateLimits';
 import { RateLimitsDisplay } from '@/components/RateLimitsDisplay';
@@ -26,15 +27,22 @@ export default function CoinsPage() {
   // State für ausgeklappte Coins
   const [expandedCoins, setExpandedCoins] = useState<Set<string>>(new Set());
   
-  // Exchange Info Hook (aus DB)
+  // Exchange Info Hook (aus DB) - für bereits hinzugefügte Coins
   const { 
     exchangeInfo, 
-    spotUsdtSymbols, 
     isLoading: isLoadingExchangeInfo, 
     error: exchangeInfoError,
     lastUpdated,
     refetch: refetchExchangeInfo
   } = useExchangeInfo();
+
+  // Binance Symbols Hook (Live von Binance API) - für neuen Coin Dropdown
+  const {
+    symbols: binanceSymbols,
+    isLoading: isLoadingBinanceSymbols,
+    error: binanceSymbolsError,
+    timestamp: binanceSymbolsTimestamp
+  } = useBinanceSymbols();
 
   // Rate Limits Hook (aus DB)
   const {
@@ -450,15 +458,22 @@ export default function CoinsPage() {
                 Coin-Symbol <span className="text-red-500">*</span>
               </label>
               <SymbolSearchDropdown
-                symbols={spotUsdtSymbols}
+                symbols={binanceSymbols}
                 value={createForm.symbol}
                 onChange={(symbol) => setCreateForm({ ...createForm, symbol })}
                 placeholder="Symbol suchen (z.B. BTC, ETH, DOGE)..."
-                disabled={isLoadingExchangeInfo}
+                disabled={isLoadingBinanceSymbols}
               />
-              <p className="mt-1 text-xs text-gray-500">
-                Nur handelbare Spot-USDT-Paare werden angezeigt ({spotUsdtSymbols.length} verfügbar)
-              </p>
+              {binanceSymbolsError ? (
+                <p className="mt-1 text-xs text-red-600">
+                  ⚠️ {binanceSymbolsError}
+                </p>
+              ) : (
+                <p className="mt-1 text-xs text-gray-500">
+                  Live-Abfrage von Binance: {binanceSymbols.length} handelbare Spot-USDT-Paare verfügbar
+                  {binanceSymbols.length > 0 && ' • Min Notional wird im Dropdown angezeigt'}
+                </p>
+              )}
             </div>
             
             <div>
