@@ -304,7 +304,7 @@ export default function TradesPage() {
                       <div className="mt-4 pt-4 border-t border-gray-200">
                         <p className="text-xs font-semibold text-gray-700 mb-2">Verkaufsbedingungen:</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                          {/* Stop Loss */}
+                          {/* Stop Loss oder Trailing Stop Loss */}
                           {(position.stopLossPrice || position.trailingStopPrice) && (
                             <div className={`p-2 rounded ${position.useTrailingStop ? 'bg-purple-50' : 'bg-red-50'}`}>
                               <div className="flex items-center justify-between">
@@ -320,6 +320,34 @@ export default function TradesPage() {
                                   Dynamisch angepasst
                                 </p>
                               )}
+                            </div>
+                          )}
+                          
+                          {/* Take Profit - nur wenn TSL nicht aktiv */}
+                          {!position.useTrailingStop && position.takeProfitPrice && (
+                            <div className="bg-green-50 p-2 rounded">
+                              <div className="flex items-center justify-between">
+                                <span className="text-gray-600 font-medium">Take Profit:</span>
+                                <span className="text-green-700 font-semibold">
+                                  {position.takeProfitPrice.toFixed(8)} USDT
+                                </span>
+                              </div>
+                              <p className="text-gray-500 text-xs mt-1">
+                                Gewinnziel
+                              </p>
+                            </div>
+                          )}
+                          
+                          {/* Info wenn TSL aktiv ist */}
+                          {position.useTrailingStop && (
+                            <div className="bg-purple-50 p-2 rounded border border-purple-200">
+                              <div className="flex items-center justify-between">
+                                <span className="text-gray-600 font-medium">Take Profit:</span>
+                                <span className="text-purple-600 text-xs font-medium">Deaktiviert</span>
+                              </div>
+                              <p className="text-purple-600 text-xs mt-1">
+                                TSL hat Priorität
+                              </p>
                             </div>
                           )}
                         </div>

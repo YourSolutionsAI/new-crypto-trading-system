@@ -38,6 +38,7 @@ export interface Position {
   maLong?: number | null;
   maCrossSellPrice?: number | null;
   stopLossPrice?: number | null;
+  takeProfitPrice?: number | null;
   trailingStopPrice?: number | null;
   useTrailingStop?: boolean;
   // Cooldown Information

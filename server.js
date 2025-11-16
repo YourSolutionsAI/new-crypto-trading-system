@@ -1634,6 +1634,7 @@ app.get('/api/positions', async (req, res) => {
       let maLong = null;
       let maCrossSellPrice = null;
       let stopLossPrice = null;
+      let takeProfitPrice = null;
       let trailingStopPrice = null;
       let useTrailingStop = false;
       
@@ -1708,11 +1709,13 @@ app.get('/api/positions', async (req, res) => {
             }
           }
           
-          // Berechne Stop Loss Preise
+          // Berechne Stop Loss Preise und Take Profit
           if (fullStrategyConfig?.risk) {
             const stopLossPercent = fullStrategyConfig.risk.stop_loss_percent ?? 0;
+            const takeProfitPercent = fullStrategyConfig.risk.take_profit_percent ?? 0;
             useTrailingStop = fullStrategyConfig.risk.use_trailing_stop === true;
             
+            // Stop Loss / Trailing Stop Loss
             if (stopLossPercent > 0) {
               if (useTrailingStop) {
                 // Trailing Stop Loss: Verwende den aktuellen trailing_stop_price aus der Position
@@ -1732,6 +1735,11 @@ app.get('/api/positions', async (req, res) => {
                 // Statischer Stop Loss
                 stopLossPrice = entryPrice * (1 - stopLossPercent / 100);
               }
+            }
+            
+            // Take Profit (nur wenn TSL nicht aktiv)
+            if (!useTrailingStop && takeProfitPercent > 0) {
+              takeProfitPrice = entryPrice * (1 + takeProfitPercent / 100);
             }
           }
         } catch (configError) {
@@ -1765,6 +1773,7 @@ app.get('/api/positions', async (req, res) => {
         maLong: maLong,
         maCrossSellPrice: maCrossSellPrice,
         stopLossPrice: stopLossPrice,
+        takeProfitPrice: takeProfitPrice,
         trailingStopPrice: trailingStopPrice,
         useTrailingStop: useTrailingStop,
         // Cooldown Information
