@@ -159,8 +159,6 @@ export default function InfoTooltip({
     updateTargetRect();
   }, [isVisible, updateTargetRect]);
 
-  if (!isClient) return null;
-
   return (
     <div
       className="inline-block"
@@ -179,7 +177,7 @@ export default function InfoTooltip({
         i
       </div>
 
-      {isVisible && (
+      {isClient && isVisible && (
         <TooltipPortal
           content={content}
           targetRect={targetRect}
