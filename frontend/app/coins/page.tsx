@@ -854,6 +854,7 @@ export default function CoinsPage() {
                       </div>
 
                       {/* Details anzeigen/ausblenden Button */}
+                      <div className="flex items-center gap-4">
                       <button
                         onClick={() => toggleCoinDetails(coin.symbol)}
                         className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 transition-colors"
@@ -900,6 +901,7 @@ export default function CoinsPage() {
                         >
                         ✏️ Bearbeiten
                         </button>
+                      </div>
                       </div>
                     )}
               </li>
