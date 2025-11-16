@@ -368,17 +368,17 @@ export default function CoinsPage() {
               )}
             </button>
             
-            {!showCreateForm && (
-              <button
-                onClick={handleStartCreate}
-                className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
-              >
-                Neuen Coin hinzufügen
-              </button>
-            )}
-          </div>
+          {!showCreateForm && (
+            <button
+              onClick={handleStartCreate}
+              className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-green-600 hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-green-500"
+            >
+              Neuen Coin hinzufügen
+            </button>
+          )}
         </div>
-        
+      </div>
+
         {/* Sync Message */}
         {syncMessage && (
           <div className={`mt-4 p-4 rounded-md ${
@@ -565,253 +565,253 @@ export default function CoinsPage() {
                         </span>
                       </div>
                     </div>
-                  </div>
-
-                  {isEditing ? (
-                    <div className="mt-4 space-y-4">
-                      {/* Strategie-Auswahl */}
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700">
-                          Strategie
-                        </label>
-                        <select
-                          value={editForm.strategy_id || ''}
-                          onChange={(e) =>
-                            setEditForm({
-                              ...editForm,
-                              strategy_id: e.target.value || null,
-                            })
-                          }
-                          className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
-                        >
-                          <option value="">Keine Strategie</option>
-                          {strategies.map((s) => (
-                            <option key={s.id} value={s.id}>
-                              {s.name}
-                            </option>
-                          ))}
-                        </select>
                       </div>
 
-                      {/* Settings */}
-                      <div className="border-t border-gray-200 pt-4">
-                        <h4 className="text-sm font-medium text-gray-900 mb-3">
-                          Signal-Einstellungen
-                        </h4>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">
-                              Signal Threshold (%)
-                            </label>
-                            <input
-                              type="text"
-                              value={inputValues.signal_threshold_percent ?? (editForm.signal_threshold_percent !== undefined ? formatNumber(editForm.signal_threshold_percent, 3) : '')}
-                              onChange={(e) => {
-                                setInputValues({ ...inputValues, signal_threshold_percent: e.target.value });
-                              }}
-                              onBlur={(e) => {
-                                const parsed = parseFormattedNumber(e.target.value);
-                                setEditForm({
-                                  ...editForm,
-                                  signal_threshold_percent: parsed,
-                                });
-                                if (parsed !== undefined) {
-                                  setInputValues({ ...inputValues, signal_threshold_percent: formatNumber(parsed, 3) });
-                                }
-                              }}
-                              placeholder="0,000"
-                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">
-                              Signal Cooldown (ms)
-                            </label>
-                            <input
-                              type="text"
-                              value={inputValues.signal_cooldown_ms ?? (editForm.signal_cooldown_ms !== undefined ? formatNumber(editForm.signal_cooldown_ms, 0) : '')}
-                              onChange={(e) => {
-                                setInputValues({ ...inputValues, signal_cooldown_ms: e.target.value });
-                              }}
-                              onBlur={(e) => {
-                                const parsed = parseFormattedNumber(e.target.value);
-                                const value = parsed ? Math.floor(parsed) : undefined;
-                                setEditForm({
-                                  ...editForm,
-                                  signal_cooldown_ms: value,
-                                });
-                                if (value !== undefined) {
-                                  setInputValues({ ...inputValues, signal_cooldown_ms: formatNumber(value, 0) });
-                                }
-                              }}
-                              placeholder="0"
-                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">
-                              Trade Cooldown (ms)
-                            </label>
-                            <input
-                              type="text"
-                              value={inputValues.trade_cooldown_ms ?? (editForm.trade_cooldown_ms !== undefined ? formatNumber(editForm.trade_cooldown_ms, 0) : '')}
-                              onChange={(e) => {
-                                setInputValues({ ...inputValues, trade_cooldown_ms: e.target.value });
-                              }}
-                              onBlur={(e) => {
-                                const parsed = parseFormattedNumber(e.target.value);
-                                const value = parsed ? Math.floor(parsed) : undefined;
-                                setEditForm({
-                                  ...editForm,
-                                  trade_cooldown_ms: value,
-                                });
-                                if (value !== undefined) {
-                                  setInputValues({ ...inputValues, trade_cooldown_ms: formatNumber(value, 0) });
-                                }
-                              }}
-                              placeholder="0"
-                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
-                            />
-                            <p className="mt-1 text-xs text-gray-500">Pause zwischen Trades für diesen Coin (pro Coin individuell)</p>
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Risk Management */}
-                      <div className="border-t border-gray-200 pt-4">
-                        <h4 className="text-sm font-medium text-gray-900 mb-3">
-                          Risk Management
-                        </h4>
-                        <div className="grid grid-cols-2 gap-4">
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">
-                              Trade Size (USDT)
-                            </label>
-                            <input
-                              type="text"
-                              value={inputValues.max_trade_size_usdt ?? (editForm.max_trade_size_usdt !== undefined ? formatNumber(editForm.max_trade_size_usdt, 2) : '')}
-                              onChange={(e) => {
-                                setInputValues({ ...inputValues, max_trade_size_usdt: e.target.value });
-                              }}
-                              onBlur={(e) => {
-                                const parsed = parseFormattedNumber(e.target.value);
-                                setEditForm({
-                                  ...editForm,
-                                  max_trade_size_usdt: parsed,
-                                });
-                                if (parsed !== undefined) {
-                                  setInputValues({ ...inputValues, max_trade_size_usdt: formatNumber(parsed, 2) });
-                                }
-                              }}
-                              placeholder="0,00"
-                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">
-                              Stop-Loss (%)
-                            </label>
-                            <input
-                              type="text"
-                              value={inputValues.stop_loss_percent ?? (editForm.stop_loss_percent !== undefined ? formatNumber(editForm.stop_loss_percent, 2) : '')}
-                              onChange={(e) => {
-                                setInputValues({ ...inputValues, stop_loss_percent: e.target.value });
-                              }}
-                              onBlur={(e) => {
-                                const parsed = parseFormattedNumber(e.target.value);
-                                setEditForm({
-                                  ...editForm,
-                                  stop_loss_percent: parsed,
-                                });
-                                if (parsed !== undefined) {
-                                  setInputValues({ ...inputValues, stop_loss_percent: formatNumber(parsed, 2) });
-                                }
-                              }}
-                              placeholder="0,00"
-                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
-                            />
-                          </div>
-                          <div>
-                            <label className="block text-sm font-medium text-gray-700">
-                              Take-Profit (%)
-                            </label>
-                            <input
-                              type="text"
-                              value={inputValues.take_profit_percent ?? (editForm.take_profit_percent !== undefined ? formatNumber(editForm.take_profit_percent, 2) : '')}
-                              onChange={(e) => {
-                                setInputValues({ ...inputValues, take_profit_percent: e.target.value });
-                              }}
-                              onBlur={(e) => {
-                                const parsed = parseFormattedNumber(e.target.value);
-                                setEditForm({
-                                  ...editForm,
-                                  take_profit_percent: parsed,
-                                });
-                                if (parsed !== undefined) {
-                                  setInputValues({ ...inputValues, take_profit_percent: formatNumber(parsed, 2) });
-                                }
-                              }}
-                              placeholder="0,00"
-                              className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
-                            />
-                          </div>
+                      {isEditing ? (
+                      <div className="mt-4 space-y-4">
+                        {/* Strategie-Auswahl */}
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700">
+                            Strategie
+                          </label>
+                          <select
+                            value={editForm.strategy_id || ''}
+                            onChange={(e) =>
+                              setEditForm({
+                                ...editForm,
+                                strategy_id: e.target.value || null,
+                              })
+                            }
+                            className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm"
+                          >
+                            <option value="">Keine Strategie</option>
+                            {strategies.map((s) => (
+                              <option key={s.id} value={s.id}>
+                                {s.name}
+                              </option>
+                            ))}
+                          </select>
                         </div>
 
-                        {/* Trailing Stop Loss */}
-                        <div className="mt-4 border-t border-gray-200 pt-4">
+                        {/* Settings */}
+                        <div className="border-t border-gray-200 pt-4">
                           <h4 className="text-sm font-medium text-gray-900 mb-3">
-                            Trailing Stop Loss
+                            Signal-Einstellungen
                           </h4>
-                          <div className="flex items-center">
-                            <input
-                              type="checkbox"
-                              id={`trailing-stop-${coin.symbol}`}
-                              checked={editForm.use_trailing_stop || false}
-                              onChange={(e) =>
-                                setEditForm({
-                                  ...editForm,
-                                  use_trailing_stop: e.target.checked,
-                                  trailing_stop_activation_threshold: 0
-                                })
-                              }
-                              className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
-                            />
-                            <label
-                              htmlFor={`trailing-stop-${coin.symbol}`}
-                              className="ml-2 block text-sm text-gray-900"
-                            >
-                              Trailing Stop Loss aktivieren
-                            </label>
-                          </div>
-                          {editForm.use_trailing_stop && (
-                            <div className="mt-2 p-3 bg-purple-50 rounded border border-purple-200">
-                              <p className="text-xs text-purple-700">
-                                <strong>ℹ️ Trailing Stop Loss:</strong><br/>
-                                • Sofort aktiv beim Kauf<br/>
-                                • Folgt automatisch dem höchsten Preis<br/>
-                                • Verkauf bei: Höchster Preis - Stop Loss %
-                              </p>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700">
+                                Signal Threshold (%)
+                              </label>
+                              <input
+                                type="text"
+                                value={inputValues.signal_threshold_percent ?? (editForm.signal_threshold_percent !== undefined ? formatNumber(editForm.signal_threshold_percent, 3) : '')}
+                                onChange={(e) => {
+                                  setInputValues({ ...inputValues, signal_threshold_percent: e.target.value });
+                                }}
+                                onBlur={(e) => {
+                                  const parsed = parseFormattedNumber(e.target.value);
+                                  setEditForm({
+                                    ...editForm,
+                                    signal_threshold_percent: parsed,
+                                  });
+                                  if (parsed !== undefined) {
+                                    setInputValues({ ...inputValues, signal_threshold_percent: formatNumber(parsed, 3) });
+                                  }
+                                }}
+                                placeholder="0,000"
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
+                              />
                             </div>
-                          )}
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700">
+                                Signal Cooldown (ms)
+                              </label>
+                              <input
+                                type="text"
+                                value={inputValues.signal_cooldown_ms ?? (editForm.signal_cooldown_ms !== undefined ? formatNumber(editForm.signal_cooldown_ms, 0) : '')}
+                                onChange={(e) => {
+                                  setInputValues({ ...inputValues, signal_cooldown_ms: e.target.value });
+                                }}
+                                onBlur={(e) => {
+                                  const parsed = parseFormattedNumber(e.target.value);
+                                  const value = parsed ? Math.floor(parsed) : undefined;
+                                  setEditForm({
+                                    ...editForm,
+                                    signal_cooldown_ms: value,
+                                  });
+                                  if (value !== undefined) {
+                                    setInputValues({ ...inputValues, signal_cooldown_ms: formatNumber(value, 0) });
+                                  }
+                                }}
+                                placeholder="0"
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700">
+                                Trade Cooldown (ms)
+                              </label>
+                              <input
+                                type="text"
+                                value={inputValues.trade_cooldown_ms ?? (editForm.trade_cooldown_ms !== undefined ? formatNumber(editForm.trade_cooldown_ms, 0) : '')}
+                                onChange={(e) => {
+                                  setInputValues({ ...inputValues, trade_cooldown_ms: e.target.value });
+                                }}
+                                onBlur={(e) => {
+                                  const parsed = parseFormattedNumber(e.target.value);
+                                  const value = parsed ? Math.floor(parsed) : undefined;
+                                  setEditForm({
+                                    ...editForm,
+                                    trade_cooldown_ms: value,
+                                  });
+                                  if (value !== undefined) {
+                                    setInputValues({ ...inputValues, trade_cooldown_ms: formatNumber(value, 0) });
+                                  }
+                                }}
+                                placeholder="0"
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
+                              />
+                              <p className="mt-1 text-xs text-gray-500">Pause zwischen Trades für diesen Coin (pro Coin individuell)</p>
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Risk Management */}
+                        <div className="border-t border-gray-200 pt-4">
+                          <h4 className="text-sm font-medium text-gray-900 mb-3">
+                            Risk Management
+                          </h4>
+                          <div className="grid grid-cols-2 gap-4">
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700">
+                                Trade Size (USDT)
+                              </label>
+                              <input
+                                type="text"
+                                value={inputValues.max_trade_size_usdt ?? (editForm.max_trade_size_usdt !== undefined ? formatNumber(editForm.max_trade_size_usdt, 2) : '')}
+                                onChange={(e) => {
+                                  setInputValues({ ...inputValues, max_trade_size_usdt: e.target.value });
+                                }}
+                                onBlur={(e) => {
+                                  const parsed = parseFormattedNumber(e.target.value);
+                                  setEditForm({
+                                    ...editForm,
+                                    max_trade_size_usdt: parsed,
+                                  });
+                                  if (parsed !== undefined) {
+                                    setInputValues({ ...inputValues, max_trade_size_usdt: formatNumber(parsed, 2) });
+                                  }
+                                }}
+                                placeholder="0,00"
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700">
+                                Stop-Loss (%)
+                              </label>
+                              <input
+                                type="text"
+                                value={inputValues.stop_loss_percent ?? (editForm.stop_loss_percent !== undefined ? formatNumber(editForm.stop_loss_percent, 2) : '')}
+                                onChange={(e) => {
+                                  setInputValues({ ...inputValues, stop_loss_percent: e.target.value });
+                                }}
+                                onBlur={(e) => {
+                                  const parsed = parseFormattedNumber(e.target.value);
+                                  setEditForm({
+                                    ...editForm,
+                                    stop_loss_percent: parsed,
+                                  });
+                                  if (parsed !== undefined) {
+                                    setInputValues({ ...inputValues, stop_loss_percent: formatNumber(parsed, 2) });
+                                  }
+                                }}
+                                placeholder="0,00"
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-sm font-medium text-gray-700">
+                                Take-Profit (%)
+                              </label>
+                              <input
+                                type="text"
+                                value={inputValues.take_profit_percent ?? (editForm.take_profit_percent !== undefined ? formatNumber(editForm.take_profit_percent, 2) : '')}
+                                onChange={(e) => {
+                                  setInputValues({ ...inputValues, take_profit_percent: e.target.value });
+                                }}
+                                onBlur={(e) => {
+                                  const parsed = parseFormattedNumber(e.target.value);
+                                  setEditForm({
+                                    ...editForm,
+                                    take_profit_percent: parsed,
+                                  });
+                                  if (parsed !== undefined) {
+                                    setInputValues({ ...inputValues, take_profit_percent: formatNumber(parsed, 2) });
+                                  }
+                                }}
+                                placeholder="0,00"
+                                className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Trailing Stop Loss */}
+                          <div className="mt-4 border-t border-gray-200 pt-4">
+                            <h4 className="text-sm font-medium text-gray-900 mb-3">
+                              Trailing Stop Loss
+                            </h4>
+                            <div className="flex items-center">
+                              <input
+                                type="checkbox"
+                                id={`trailing-stop-${coin.symbol}`}
+                                checked={editForm.use_trailing_stop || false}
+                                onChange={(e) =>
+                                  setEditForm({
+                                    ...editForm,
+                                    use_trailing_stop: e.target.checked,
+                                    trailing_stop_activation_threshold: 0
+                                  })
+                                }
+                                className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                              />
+                              <label
+                                htmlFor={`trailing-stop-${coin.symbol}`}
+                                className="ml-2 block text-sm text-gray-900"
+                              >
+                                Trailing Stop Loss aktivieren
+                              </label>
+                            </div>
+                            {editForm.use_trailing_stop && (
+                              <div className="mt-2 p-3 bg-purple-50 rounded border border-purple-200">
+                                <p className="text-xs text-purple-700">
+                                  <strong>ℹ️ Trailing Stop Loss:</strong><br/>
+                                  • Sofort aktiv beim Kauf<br/>
+                                  • Folgt automatisch dem höchsten Preis<br/>
+                                  • Verkauf bei: Höchster Preis - Stop Loss %
+                                </p>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="flex space-x-3">
+                          <button
+                            onClick={() => handleSaveEdit(coin.symbol)}
+                            className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                          >
+                            Speichern
+                          </button>
+                          <button
+                            onClick={handleCancelEdit}
+                            className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
+                          >
+                            Abbrechen
+                          </button>
                         </div>
                       </div>
-
-                      <div className="flex space-x-3">
-                        <button
-                          onClick={() => handleSaveEdit(coin.symbol)}
-                          className="inline-flex items-center px-4 py-2 border border-transparent text-sm font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                        >
-                          Speichern
-                        </button>
-                        <button
-                          onClick={handleCancelEdit}
-                          className="inline-flex items-center px-4 py-2 border border-gray-300 text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                        >
-                          Abbrechen
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
+                    ) : (
                     <div className="mt-4 space-y-4">
                       {/* Bot Config Übersicht - Immer sichtbar */}
                       <div className="bg-gray-50 rounded-lg p-4 border border-gray-200">
@@ -894,16 +894,16 @@ export default function CoinsPage() {
                       )}
 
                       {/* Bearbeiten Button - Immer sichtbar */}
-                      <button
-                        onClick={() => handleStartEdit(coin)}
+                        <button
+                          onClick={() => handleStartEdit(coin)}
                         className="inline-flex items-center px-4 py-2 border border-gray-300 shadow-sm text-sm font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500"
-                      >
+                        >
                         ✏️ Bearbeiten
-                      </button>
-                    </div>
-                  )}
-                </li>
-              );
+                        </button>
+                      </div>
+                    )}
+              </li>
+            );
             })
           )}
         </ul>
