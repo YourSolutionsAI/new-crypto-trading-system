@@ -231,6 +231,35 @@ export const getCoins = async (): Promise<CoinStrategy[]> => {
   }
 };
 
+export const createCoin = async (
+  coin: {
+    symbol: string;
+    strategy_id?: string | null;
+    active?: boolean;
+    config?: {
+      settings?: {
+        signal_threshold_percent?: number;
+        signal_cooldown_ms?: number;
+        trade_cooldown_ms?: number;
+      };
+      risk?: {
+        max_trade_size_usdt?: number;
+        stop_loss_percent?: number;
+        take_profit_percent?: number;
+        use_trailing_stop?: boolean;
+        trailing_stop_activation_threshold?: number;
+      };
+    };
+  }
+): Promise<CoinStrategy> => {
+  const response = await api.put(`/api/coins/${coin.symbol}`, {
+    strategy_id: coin.strategy_id || null,
+    active: coin.active !== undefined ? coin.active : false,
+    config: coin.config
+  });
+  return response.data.coin;
+};
+
 export const updateCoinStrategy = async (
   symbol: string,
   updates: {
