@@ -64,6 +64,7 @@ let lastTradeTimes = new Map(); // Map<symbol, number> - Trade-Cooldown pro Symb
 let tradesInProgress = new Map(); // Map<symbol, Promise> - Trade-Lock pro Symbol (verhindert Doppelausführungen)
 let tradeQueues = new Map(); // Map<symbol, Promise> - Queue für Trades pro Symbol (verhindert Race Conditions)
 let openPositions = new Map(); // Tracking offener Positionen (bereits symbol-spezifisch: ${strategy.id}_${symbol})
+let pendingBuySignals = new Map(); // Map<positionKey, {timestamp, reason}> - Verhindert mehrfache Kaufsignale
 let pendingSellSignals = new Map(); // Map<positionKey, {timestamp, reason, exitReason}> - Verhindert mehrfache Verkaufssignale
 let botSettings = {}; // Bot-Einstellungen aus Supabase
 let lotSizes = {}; // Lot Size Regeln aus Supabase
@@ -165,7 +166,9 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
         total_buy_quantity: existingPosition.total_buy_quantity + quantity,
         total_buy_value: newTotalValue,
         highest_price: newHighestPrice,
-        updated_at: new Date().toISOString()
+        updated_at: new Date().toISOString(),
+        // STATUS: Position ist jetzt OFFEN (Kauf abgeschlossen)
+        trade_status: 'OFFEN'
       };
       
       // Update Trailing Stop Felder nur wenn Trailing aktiv
@@ -207,7 +210,9 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
         total_buy_value: quantity * price,
         status: 'open',
         opened_at: new Date().toISOString(),
-        highest_price: initialHighestPrice
+        highest_price: initialHighestPrice,
+        // STATUS: Neue Position ist OFFEN (Kauf abgeschlossen)
+        trade_status: 'OFFEN'
       };
       
       // Füge Trailing Stop Felder hinzu wenn aktiv
@@ -2767,18 +2772,19 @@ function generateSignal(currentPrice, strategy, priceHistory) {
     };
   }
 
-  // Verkauf-Signal: Kurzer MA unter langem MA (Bearish)
+  // WICHTIG: Strategien generieren KEINE Verkaufssignale mehr!
+  // Verkäufe werden ausschließlich durch Stop-Loss, Take-Profit oder Trailing Stop ausgelöst.
+  // Bei bearish Signal: Einfach 'hold' zurückgeben (keine Aktion)
+  
+  // Bearish-Crossover erkannt, aber keine Verkaufsaktion
   if (differencePercent < -threshold) {
     return {
-      action: 'sell',
-      price: currentPrice,
-      reason: `MA Crossover Bearish: MA${maShortPeriod}=${maShort.toFixed(2)} < MA${maLongPeriod}=${maLong.toFixed(2)}${additionalReasons.length > 0 ? ' | ' + additionalReasons.join(', ') : ''}`,
-      exitReason: 'ma_cross', // NEU: Exit-Grund
+      action: 'hold',
+      reason: `MA Crossover Bearish erkannt: MA${maShortPeriod}=${maShort.toFixed(2)} < MA${maLongPeriod}=${maLong.toFixed(2)} (Verkäufe nur durch SL/TP/TSL)${additionalReasons.length > 0 ? ' | ' + additionalReasons.join(', ') : ''}`,
       maShort: maShort.toFixed(2),
       maLong: maLong.toFixed(2),
       difference: difference.toFixed(2),
       differencePercent: differencePercent.toFixed(3),
-      confidence: confidence.toFixed(1),
       indicators: {
         rsi: indicators.rsi ? indicators.rsi.toFixed(2) : null,
         macd: indicators.macd ? {
@@ -3158,7 +3164,12 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
       });
     }
 
-    // STATISCHER STOP-LOSS LOGIK (wenn Trailing Stop nicht aktiv oder noch nicht aktiviert)
+    // ═══════════════════════════════════════════════════════════════
+    // WICHTIG: Wenn Trailing Stop aktiv ist, werden Stop-Loss und 
+    // Take-Profit DEAKTIVIERT (nur TSL wird verwendet)
+    // ═══════════════════════════════════════════════════════════════
+    
+    // STATISCHER STOP-LOSS LOGIK (NUR wenn Trailing Stop NICHT aktiv)
     if (!useTrailingStop && stopLossPercent > 0 && priceChangePercent <= -stopLossPercent) {
       console.log('');
       console.log('═══════════════════════════════════════════════');
@@ -3223,12 +3234,9 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
       continue; // Überspringe Take-Profit Prüfung
     }
 
-    // TAKE-PROFIT PRÜFUNG (kann parallel zu Trailing Stop laufen, wenn aktiviert)
-    if (takeProfitPercent > 0 && priceChangePercent >= takeProfitPercent) {
-      // Wenn Trailing Stop aktiv ist, überspringe Take-Profit (Trailing Stop hat Priorität)
-      if (useTrailingStop) {
-        continue;
-      }
+    // TAKE-PROFIT PRÜFUNG (NUR wenn Trailing Stop NICHT aktiv)
+    // WICHTIG: Trailing Stop hat absolute Priorität - wenn aktiv, wird Take-Profit ignoriert
+    if (!useTrailingStop && takeProfitPercent > 0 && priceChangePercent >= takeProfitPercent) {
 
       console.log('');
       console.log('═══════════════════════════════════════════════');
@@ -3573,7 +3581,10 @@ async function canTrade(signal, strategy) {
       return { allowed: false, reason: reason };
     }
     
-    // Check positions Tabelle (als Fallback)
+    // ═══════════════════════════════════════════════════════════════
+    // STATUS-PRÜFUNG: Verhindert Doppel-Käufe
+    // ═══════════════════════════════════════════════════════════════
+    // Check positions Tabelle (mit trade_status)
     const { data: existingPosition, error: posError } = await supabase
       .from('positions')
       .select('*')
@@ -3582,6 +3593,24 @@ async function canTrade(signal, strategy) {
       .in('status', ['open', 'partial'])
       .gt('quantity', 0)
       .maybeSingle();
+    
+    // WICHTIG: Prüfe trade_status wenn Position existiert
+    if (existingPosition) {
+      const tradeStatus = existingPosition.trade_status;
+      
+      // Status-Prüfung: Kein Kauf erlaubt wenn Status != PENDING
+      if (tradeStatus && tradeStatus !== 'PENDING') {
+        const reason = `Kauf nicht erlaubt: Position hat Status '${tradeStatus}' (erwartet: 'PENDING' oder keine Position)`;
+        console.log(`⚠️  ${reason}`);
+        await logBotEvent('warning', `BUY-Signal ignoriert: Ungültiger Status`, {
+          symbol: symbol,
+          current_status: tradeStatus,
+          expected_status: 'PENDING',
+          strategy_id: strategy.id
+        });
+        return { allowed: false, reason: reason };
+      }
+    }
     
     if (posError) {
       console.error(`❌ Fehler beim Prüfen der Position: ${posError.message}`);
@@ -3638,7 +3667,10 @@ async function canTrade(signal, strategy) {
 
   // Bei SELL: Prüfen ob offene Position existiert
   if (signal.action === 'sell') {
-    // Check positions Tabelle
+    // ═══════════════════════════════════════════════════════════════
+    // STATUS-PRÜFUNG: Verhindert Doppel-Verkäufe
+    // ═══════════════════════════════════════════════════════════════
+    // Check positions Tabelle (mit trade_status)
     const { data: position, error: posError } = await supabase
       .from('positions')
       .select('*')
@@ -3657,6 +3689,20 @@ async function canTrade(signal, strategy) {
         symbol: symbol,
         strategy_id: strategy.id,
         strategy_name: strategy.name
+      });
+      return { allowed: false, reason: reason };
+    }
+    
+    // WICHTIG: Prüfe trade_status - nur OFFEN erlaubt Verkauf
+    const tradeStatus = position.trade_status;
+    if (tradeStatus && tradeStatus !== 'OFFEN') {
+      const reason = `Verkauf nicht erlaubt: Position hat Status '${tradeStatus}' (erwartet: 'OFFEN')`;
+      console.log(`⚠️  ${reason}`);
+      await logBotEvent('warning', `SELL-Signal ignoriert: Ungültiger Status`, {
+        symbol: symbol,
+        current_status: tradeStatus,
+        expected_status: 'OFFEN',
+        strategy_id: strategy.id
       });
       return { allowed: false, reason: reason };
     }
@@ -3830,6 +3876,36 @@ async function executeTrade(signal, strategy) {
       tradeQueues.delete(symbol);
       return null;
     }
+
+    // ═══════════════════════════════════════════════════════════════
+    // STATUS-ÜBERGANG: Setze Status VOR Order-Platzierung
+    // ═══════════════════════════════════════════════════════════════
+    // BUY: PENDING → KAUFSIGNAL
+    // SELL: OFFEN → VERKAUFSIGNAL
+    const newStatus = side === 'BUY' ? 'KAUFSIGNAL' : 'VERKAUFSIGNAL';
+    
+    // Finde Position in DB um Status zu setzen
+    if (side === 'SELL') {
+      // Bei SELL: Setze Status auf VERKAUFSIGNAL
+      const { error: statusError } = await supabase
+        .from('positions')
+        .update({ 
+          trade_status: newStatus,
+          updated_at: new Date().toISOString()
+        })
+        .eq('strategy_id', strategy.id)
+        .eq('symbol', symbol)
+        .eq('trade_status', 'OFFEN') // Nur wenn Status aktuell OFFEN ist
+        .gt('quantity', 0);
+      
+      if (statusError) {
+        console.error(`❌ Fehler beim Setzen des Status auf ${newStatus}: ${statusError.message}`);
+        // Fahre trotzdem fort, aber logge Fehler
+      } else {
+        console.log(`✅ Status gesetzt: OFFEN → ${newStatus} für ${symbol}`);
+      }
+    }
+    // Hinweis: Bei BUY wird Status in openOrUpdatePosition() gesetzt
 
     // Order auf Binance Testnet platzieren
     const order = await binanceClient.order({
@@ -4831,9 +4907,30 @@ async function createWebSocketConnection(symbol, strategies) {
 
         // Kauf- oder Verkauf-Signal
         if (signal.action === 'buy' || signal.action === 'sell') {
-          // KRITISCH: Bei SELL-Signalen prüfe ob bereits ein Verkaufssignal aktiv ist
+          // KRITISCH: Prüfe ob bereits ein aktives Signal vorhanden ist
+          const positionKey = `${strategy.id}_${symbol}`;
+          
+          // Bei BUY-Signalen: Prüfe ob bereits ein Kaufsignal aktiv ist
+          if (signal.action === 'buy') {
+            const pendingSignal = pendingBuySignals.get(positionKey);
+            if (pendingSignal) {
+              const signalAge = Date.now() - pendingSignal.timestamp;
+              const maxSignalAge = 60000; // 60 Sekunden
+              
+              if (signalAge < maxSignalAge) {
+                // Signal ist noch aktiv - überspringe dieses Signal
+                console.log(`⏭️  [${symbol}] BUY-Signal übersprungen: Bereits aktives Kaufsignal vorhanden (${pendingSignal.reason})`);
+                continue;
+              } else {
+                // Signal ist zu alt - entferne es
+                console.log(`🧹 [${symbol}] Entferne veraltetes Kaufsignal (${Math.round(signalAge / 1000)}s alt)`);
+                pendingBuySignals.delete(positionKey);
+              }
+            }
+          }
+          
+          // Bei SELL-Signalen: Prüfe ob bereits ein Verkaufssignal aktiv ist
           if (signal.action === 'sell') {
-            const positionKey = `${strategy.id}_${symbol}`;
             const pendingSignal = pendingSellSignals.get(positionKey);
             if (pendingSignal) {
               const signalAge = Date.now() - pendingSignal.timestamp;
@@ -4911,10 +5008,25 @@ async function createWebSocketConnection(symbol, strategies) {
             });
             
             try {
-              // KRITISCH: Setze State für MA Cross Signale NACH allen Checks, VOR Trade-Ausführung
+              const positionKey = `${strategy.id}_${symbol}`;
+              
+              // KRITISCH: Setze State für Signale NACH allen Checks, VOR Trade-Ausführung
               // Dies verhindert mehrfache Signale, aber nur wenn Trade wirklich ausgeführt werden kann
+              
+              // Bei BUY-Signalen: Setze pendingBuySignals
+              if (signal.action === 'buy') {
+                // Prüfe nochmal ob nicht bereits ein Signal aktiv ist (Race Condition Schutz)
+                if (!pendingBuySignals.has(positionKey)) {
+                  pendingBuySignals.set(positionKey, {
+                    timestamp: Date.now(),
+                    reason: signal.reason || 'Kaufsignal'
+                  });
+                  console.log(`🔒 [${symbol}] Kaufsignal-State gesetzt`);
+                }
+              }
+              
+              // Bei SELL-Signalen: Setze pendingSellSignals (nur für MA Cross)
               if (signal.action === 'sell' && signal.exitReason === 'ma_cross') {
-                const positionKey = `${strategy.id}_${symbol}`;
                 // Prüfe nochmal ob nicht bereits ein Signal aktiv ist (Race Condition Schutz)
                 if (!pendingSellSignals.has(positionKey)) {
                   pendingSellSignals.set(positionKey, {
@@ -4928,9 +5040,16 @@ async function createWebSocketConnection(symbol, strategies) {
               
               const tradeResult = await executeTrade(signal, strategy);
               
+              // Bei erfolgreichem BUY-Trade: State zurücksetzen
+              if (signal.action === 'buy' && tradeResult) {
+                if (pendingBuySignals.has(positionKey)) {
+                  console.log(`✅ [${symbol}] Kaufsignal-State entfernt (Trade erfolgreich)`);
+                  pendingBuySignals.delete(positionKey);
+                }
+              }
+              
               // Bei erfolgreichem SELL-Trade: State zurücksetzen
               if (signal.action === 'sell' && tradeResult) {
-                const positionKey = `${strategy.id}_${symbol}`;
                 if (pendingSellSignals.has(positionKey)) {
                   console.log(`✅ [${symbol}] Verkaufssignal-State entfernt (Trade erfolgreich)`);
                   pendingSellSignals.delete(positionKey);
