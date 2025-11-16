@@ -414,11 +414,18 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, closeReason =
       }
     } else {
       // Dies sollte eigentlich nie passieren, da es nur volle Verkäufe gibt
-      // Aber für Sicherheit behalten wir es als Fallback
-      console.warn(`⚠️  UNERWARTET: Teilverkauf erkannt für ${symbol} (${remainingQuantity} verbleibend) - sollte nicht passieren!`);
+      // Aber für Sicherheit: Wenn Position reduziert wurde, schließe sie automatisch
+      // Reduzierte Positionen sollen nicht mehr in den offenen Positionen angezeigt werden
+      console.warn(`⚠️  UNERWARTET: Teilverkauf erkannt für ${symbol} (${remainingQuantity} verbleibend) - schließe Position automatisch!`);
       console.warn(`   Verkauft: ${requestedQuantity}, Vorher: ${currentQuantity}, Verbleibend: ${remainingQuantity}`);
-      // Position bleibt offen (nicht 'partial', da wir das nicht mehr verwenden)
-      updateData.status = 'open';
+      // Position automatisch schließen (nicht als 'partial' belassen)
+      updateData.status = 'closed';
+      updateData.closed_at = new Date().toISOString();
+      updateData.quantity = 0;
+      // Setze close_reason wenn angegeben
+      if (closeReason) {
+        updateData.close_reason = closeReason;
+      }
     }
     
     // WICHTIG: Atomic Update mit WHERE-Clause für Quantity-Check
@@ -1568,6 +1575,8 @@ app.put('/api/bot-settings', async (req, res) => {
 app.get('/api/positions', async (req, res) => {
   try {
     // Lade offene Positionen aus der positions Tabelle mit Strategy-Infos
+    // WICHTIG: Nur Positionen mit Status 'open' werden angezeigt (nicht 'partial')
+    // Reduzierte Positionen werden nicht mehr als "offen" angezeigt
     const { data: positions, error } = await supabase
       .from('positions')
       .select(`
@@ -1579,7 +1588,7 @@ app.get('/api/positions', async (req, res) => {
           config
         )
       `)
-      .in('status', ['open', 'partial'])
+      .eq('status', 'open')
       .gt('quantity', 0);
     
     if (error) {
@@ -2857,7 +2866,7 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
     .from('positions')
     .select('*')
     .eq('symbol', symbol)
-    .in('status', ['open', 'partial'])
+    .eq('status', 'open') // Nur wirklich offene Positionen prüfen (nicht 'partial')
     .gt('quantity', 0);
   
   if (error) {
