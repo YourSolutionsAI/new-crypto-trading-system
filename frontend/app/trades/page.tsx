@@ -304,32 +304,6 @@ export default function TradesPage() {
                       <div className="mt-4 pt-4 border-t border-gray-200">
                         <p className="text-xs font-semibold text-gray-700 mb-2">Verkaufsbedingungen:</p>
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
-                          {/* MA Cross Verkauf */}
-                          {position.maShort !== null && position.maShort !== undefined && 
-                           position.maLong !== null && position.maLong !== undefined && (
-                            <div className="bg-blue-50 p-2 rounded">
-                              <div className="flex items-center justify-between">
-                                <span className="text-gray-600 font-medium">MA Cross Strategie:</span>
-                                {position.maCrossSellPrice ? (
-                                  <span className="text-blue-700 font-semibold">
-                                    {position.maCrossSellPrice.toFixed(8)} USDT
-                                  </span>
-                                ) : (
-                                  <span className="text-gray-400">Berechne...</span>
-                                )}
-                              </div>
-                              {position.maShort < position.maLong ? (
-                                <p className="text-red-600 text-xs mt-1">
-                                  ⚠️ Verkaufssignal aktiv (MA Short &lt; MA Long)
-                                </p>
-                              ) : (
-                                <p className="text-gray-500 text-xs mt-1">
-                                  MA Short: {position.maShort.toFixed(8)} | MA Long: {position.maLong.toFixed(8)}
-                                </p>
-                              )}
-                            </div>
-                          )}
-                          
                           {/* Stop Loss */}
                           {(position.stopLossPrice || position.trailingStopPrice) && (
                             <div className={`p-2 rounded ${position.useTrailingStop ? 'bg-purple-50' : 'bg-red-50'}`}>
