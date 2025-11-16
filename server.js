@@ -4911,6 +4911,21 @@ async function createWebSocketConnection(symbol, strategies) {
             });
             
             try {
+              // KRITISCH: Setze State für MA Cross Signale NACH allen Checks, VOR Trade-Ausführung
+              // Dies verhindert mehrfache Signale, aber nur wenn Trade wirklich ausgeführt werden kann
+              if (signal.action === 'sell' && signal.exitReason === 'ma_cross') {
+                const positionKey = `${strategy.id}_${symbol}`;
+                // Prüfe nochmal ob nicht bereits ein Signal aktiv ist (Race Condition Schutz)
+                if (!pendingSellSignals.has(positionKey)) {
+                  pendingSellSignals.set(positionKey, {
+                    timestamp: Date.now(),
+                    reason: 'MA Cross Signal',
+                    exitReason: 'ma_cross'
+                  });
+                  console.log(`🔒 [${symbol}] Verkaufssignal-State gesetzt (MA Cross)`);
+                }
+              }
+              
               const tradeResult = await executeTrade(signal, strategy);
               
               // Bei erfolgreichem SELL-Trade: State zurücksetzen
@@ -4935,18 +4950,25 @@ async function createWebSocketConnection(symbol, strategies) {
                 break;
               } else {
                 console.log(`⚠️  [${symbol}] Trade nicht ausgeführt (Cooldown oder andere Checks)`);
+                // Wenn Trade nicht ausgeführt wurde (z.B. wegen Cooldown), entferne State wieder
+                // damit beim nächsten Preis-Update ein neues Signal generiert werden kann
+                if (signal.action === 'sell' && signal.exitReason === 'ma_cross') {
+                  const positionKey = `${strategy.id}_${symbol}`;
+                  if (pendingSellSignals.has(positionKey)) {
+                    console.log(`🔄 [${symbol}] Verkaufssignal-State entfernt (Trade nicht ausgeführt)`);
+                    pendingSellSignals.delete(positionKey);
+                  }
+                }
               }
             } catch (tradeError) {
               console.error(`❌ [${symbol}] Fehler beim Trade: ${tradeError.message}`);
-              // Bei Fehler: State nach 30 Sekunden zurücksetzen (falls Trade fehlgeschlagen)
+              // Bei Fehler: State sofort zurücksetzen (nicht nach 30 Sekunden warten)
               if (signal.action === 'sell') {
                 const positionKey = `${strategy.id}_${symbol}`;
-                setTimeout(() => {
-                  if (pendingSellSignals.has(positionKey)) {
-                    console.log(`🔄 [${symbol}] Setze Verkaufssignal zurück nach Fehler`);
-                    pendingSellSignals.delete(positionKey);
-                  }
-                }, 30000); // 30 Sekunden
+                if (pendingSellSignals.has(positionKey)) {
+                  console.log(`🔄 [${symbol}] Setze Verkaufssignal zurück nach Fehler`);
+                  pendingSellSignals.delete(positionKey);
+                }
               }
             }
           } else {
