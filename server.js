@@ -2841,6 +2841,10 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
       // Prüfe ob Trailing Stop aktiviert werden soll (Mindest-Gewinn-Schwelle)
       const shouldActivateTrailing = trailingActivationThreshold === 0 || priceChangePercent >= trailingActivationThreshold;
 
+      // WICHTIG: Prüfe ob Trailing Stop bereits aktiviert ist (unabhängig von Aktivierungsschwelle)
+      // Dies ist kritisch, damit der Verkauf auch ausgelöst wird, wenn die Aktivierungsschwelle nicht mehr erfüllt ist
+      const trailingStopAlreadyActive = trailingStopPrice !== null && trailingStopPrice !== undefined && !isNaN(trailingStopPrice);
+
       if (shouldActivateTrailing) {
         // Update highest_price wenn currentPrice > highestPrice
         if (currentPrice > highestPrice) {
@@ -2889,7 +2893,12 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
               console.warn(`⚠️  Fehler beim Update von Trailing Stop: ${err.message}`);
             });
         }
+      }
 
+      // KRITISCH: Prüfe Trailing Stop Auslösung IMMER wenn er aktiviert ist
+      // (auch wenn Aktivierungsschwelle nicht mehr erfüllt ist)
+      // Dies verhindert, dass der Verkauf übersprungen wird, wenn der Preis unter den Trailing Stop fällt
+      if (trailingStopAlreadyActive || (shouldActivateTrailing && trailingStopPrice)) {
         // Prüfe ob Trailing Stop ausgelöst wurde
         if (trailingStopPrice && currentPrice <= trailingStopPrice) {
           const trailingPriceChangePercent = ((currentPrice - highestPrice) / highestPrice) * 100;
