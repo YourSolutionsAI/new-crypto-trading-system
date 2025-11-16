@@ -2417,13 +2417,20 @@ app.get('/api/positions', async (req, res) => {
     // OPTIMIERUNG: Hole alle Binance-Preise PARALLEL statt sequenziell
     const priceMap = new Map();
     if (binanceClient && positions && positions.length > 0) {
+      console.log(`🔄 [API/POSITIONS] Lade Preise für ${positions.length} Positionen von Binance...`);
+      
       try {
         // Erstelle parallele Promises für alle Symbole
         const pricePromises = positions.map(position => 
           binanceClient.prices({ symbol: position.symbol })
-            .then(ticker => ({ symbol: position.symbol, price: parseFloat(ticker[position.symbol]) }))
+            .then(ticker => {
+              const price = parseFloat(ticker[position.symbol]);
+              console.log(`💰 [BINANCE] ${position.symbol}: ${price.toFixed(8)} USDT (von Binance)`);
+              return { symbol: position.symbol, price };
+            })
             .catch(err => {
-              console.warn(`⚠️  Konnte aktuellen Preis für ${position.symbol} nicht laden:`, err.message);
+              console.warn(`⚠️  [BINANCE] Fehler bei ${position.symbol}:`, err.message);
+              console.warn(`⚠️  [BINANCE] Fallback auf Entry Price: ${position.entry_price}`);
               return { symbol: position.symbol, price: parseFloat(position.entry_price) };
             })
         );
@@ -2435,8 +2442,16 @@ app.get('/api/positions', async (req, res) => {
         prices.forEach(({ symbol, price }) => {
           priceMap.set(symbol, price);
         });
+        
+        console.log(`✅ [API/POSITIONS] ${prices.length} Preise geladen`);
       } catch (error) {
         console.warn('⚠️  Fehler beim parallelen Laden der Preise:', error.message);
+      }
+    } else {
+      if (!binanceClient) {
+        console.warn('⚠️  [API/POSITIONS] binanceClient nicht verfügbar');
+      } else if (!positions || positions.length === 0) {
+        console.log('ℹ️  [API/POSITIONS] Keine Positionen zum Laden');
       }
     }
     
