@@ -1353,6 +1353,85 @@ app.put('/api/coins/:symbol', async (req, res) => {
       }
     }
 
+    // ═══════════════════════════════════════════════════════════════
+    // AUTOMATISCHE INITIALISIERUNG: Lot Size & WebSocket
+    // ═══════════════════════════════════════════════════════════════
+    // Prüfe ob lot_size und websocket für diesen Coin bereits existieren
+    const symbolUpper = symbol.toUpperCase();
+    const lotSizeKey = `lot_size_${symbolUpper}`;
+    const websocketKey = `websocket_${symbolUpper}`;
+    
+    const { data: existingSettings } = await supabase
+      .from('bot_settings')
+      .select('key')
+      .in('key', [lotSizeKey, websocketKey]);
+    
+    const hasLotSize = existingSettings?.some(s => s.key === lotSizeKey);
+    const hasWebSocket = existingSettings?.some(s => s.key === websocketKey);
+    
+    // Wenn lot_size oder websocket fehlen, aus coin_exchange_info initialisieren
+    if (!hasLotSize || !hasWebSocket) {
+      console.log(`🔄 Initialisiere bot_settings für ${symbolUpper}...`);
+      
+      const { data: exchangeInfo, error: exchangeError } = await supabase
+        .from('coin_exchange_info')
+        .select('min_qty, max_qty, step_size')
+        .eq('symbol', symbolUpper)
+        .single();
+
+      if (!exchangeError && exchangeInfo) {
+        // Berechne decimals aus step_size
+        const stepSizeStr = exchangeInfo.step_size?.toString() || '1';
+        const decimals = stepSizeStr.includes('.') 
+          ? stepSizeStr.split('.')[1].length 
+          : 0;
+
+        // Lot Size in bot_settings speichern (falls noch nicht vorhanden)
+        if (!hasLotSize) {
+          const lotSizeData = {
+            minQty: parseFloat(exchangeInfo.min_qty) || 0.1,
+            maxQty: parseFloat(exchangeInfo.max_qty) || 9000000,
+            stepSize: parseFloat(exchangeInfo.step_size) || 0.1,
+            decimals: decimals
+          };
+
+          await supabase
+            .from('bot_settings')
+            .upsert({
+              key: lotSizeKey,
+              value: lotSizeData,
+              description: `Lot Size Regeln für ${symbolUpper} (automatisch generiert)`,
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'key' });
+          
+          console.log(`✅ Lot Size für ${symbolUpper} initialisiert:`, lotSizeData);
+        }
+
+        // WebSocket URL generieren und speichern (falls noch nicht vorhanden)
+        if (!hasWebSocket) {
+          const websocketUrl = `wss://stream.binance.com:9443/ws/${symbol.toLowerCase()}@trade`;
+          
+          await supabase
+            .from('bot_settings')
+            .upsert({
+              key: websocketKey,
+              value: websocketUrl,
+              description: `WebSocket URL für ${symbolUpper} (automatisch generiert)`,
+              updated_at: new Date().toISOString()
+            }, { onConflict: 'key' });
+          
+          console.log(`✅ WebSocket für ${symbolUpper} initialisiert: ${websocketUrl}`);
+        }
+
+        // Bot Settings neu laden, damit neue Werte verfügbar sind
+        await loadBotSettings(true); // silent = true
+        console.log(`✅ Bot Settings aktualisiert für ${symbolUpper}`);
+      } else {
+        console.warn(`⚠️  Keine Exchange-Info für ${symbolUpper} gefunden.`);
+        console.warn(`💡 Bitte Exchange-Info synchronisieren (Button im Frontend) bevor Trading startet!`);
+      }
+    }
+
     // Upsert coin_strategies
     const updateData = {
       symbol: symbol.toUpperCase(),
