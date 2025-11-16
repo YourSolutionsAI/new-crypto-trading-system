@@ -1,6 +1,7 @@
 // Accordion-Komponente für erweiterte Coin-Details
 import React, { useState } from 'react';
 import type { BinanceSymbol, BinanceSymbolFilter } from '@/lib/binance-types';
+import { InfoTooltip } from './InfoTooltip';
 
 interface CoinDetailsAccordionProps {
   symbol: BinanceSymbol;
@@ -67,16 +68,23 @@ export const CoinDetailsAccordion: React.FC<CoinDetailsAccordionProps> = ({ symb
         <div className="px-4 py-4 space-y-6">
           {/* Precision & Commission */}
           <section>
-            <h4 className="text-sm font-semibold text-gray-900 mb-3 pb-2 border-b border-gray-200">
+            <h4 className="text-sm font-semibold text-gray-900 mb-3 pb-2 border-b border-gray-200 flex items-center gap-1">
               Precision & Gebühren
+              <InfoTooltip content="Precision-Werte bestimmen die Genauigkeit von Gebührenberechnungen:\n\n• Base Commission Precision: Dezimalstellen für Gebühren in Base Asset\n• Quote Commission Precision: Dezimalstellen für Gebühren in Quote Asset\n\nWichtig für die korrekte Berechnung und Anzeige von Trading-Gebühren." />
             </h4>
             <div className="grid grid-cols-2 gap-3 text-sm">
               <div>
-                <span className="text-gray-500">Base Commission Precision:</span>
+                <span className="text-gray-500 flex items-center gap-1">
+                  Base Commission Precision:
+                  <InfoTooltip content="Bestimmt die Anzahl der Dezimalstellen für Gebühren, die in Base Asset berechnet werden.\n\nBeispiel: Bei Precision 8 können Gebühren wie 0.00000001 BTC angegeben werden.\n\nWichtig für die korrekte Berechnung von Trading-Gebühren." />
+                </span>
                 <span className="ml-2 font-medium">{symbol.baseCommissionPrecision}</span>
               </div>
               <div>
-                <span className="text-gray-500">Quote Commission Precision:</span>
+                <span className="text-gray-500 flex items-center gap-1">
+                  Quote Commission Precision:
+                  <InfoTooltip content="Bestimmt die Anzahl der Dezimalstellen für Gebühren, die in Quote Asset (z.B. USDT) berechnet werden.\n\nBeispiel: Bei Precision 8 können Gebühren wie 0.00000001 USDT angegeben werden.\n\nWichtig für die korrekte Berechnung von Trading-Gebühren." />
+                </span>
                 <span className="ml-2 font-medium">{symbol.quoteCommissionPrecision}</span>
               </div>
             </div>
@@ -84,18 +92,47 @@ export const CoinDetailsAccordion: React.FC<CoinDetailsAccordionProps> = ({ symb
 
           {/* Order Features */}
           <section>
-            <h4 className="text-sm font-semibold text-gray-900 mb-3 pb-2 border-b border-gray-200">
+            <h4 className="text-sm font-semibold text-gray-900 mb-3 pb-2 border-b border-gray-200 flex items-center gap-1">
               Order-Features
+              <InfoTooltip content="Order-Features definieren erweiterte Funktionen für Orders:\n\n• Iceberg: Große Orders werden in kleine Teile aufgeteilt\n• OCO: Eine Order wird automatisch storniert, wenn die andere ausgeführt wird\n• OTO: Eine Order wird automatisch ausgelöst, wenn die andere ausgeführt wird\n• Cancel Replace: Orders können geändert werden\n• Amend: Orders können nachträglich angepasst werden\n• Peg Instructions: Spezielle Preis-Anpassungen für Orders\n• Margin Trading: Trading mit geliehenen Mitteln" />
             </h4>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-sm">
               {[
-                { label: 'Iceberg', value: symbol.icebergAllowed },
-                { label: 'OCO (One-Cancels-Other)', value: symbol.ocoAllowed },
-                { label: 'OTO (One-Triggers-Other)', value: symbol.otoAllowed },
-                { label: 'Cancel Replace', value: symbol.cancelReplaceAllowed },
-                { label: 'Amend', value: symbol.amendAllowed },
-                { label: 'Peg Instructions', value: symbol.pegInstructionsAllowed },
-                { label: 'Margin Trading', value: symbol.isMarginTradingAllowed },
+                { 
+                  label: 'Iceberg', 
+                  value: symbol.icebergAllowed,
+                  tooltip: 'Iceberg Orders teilen große Orders in kleine, versteckte Teile auf, um den Marktpreis nicht zu beeinflussen.'
+                },
+                { 
+                  label: 'OCO (One-Cancels-Other)', 
+                  value: symbol.ocoAllowed,
+                  tooltip: 'OCO Orders bestehen aus zwei Orders: Wenn eine ausgeführt wird, wird die andere automatisch storniert. Nützlich für Stop-Loss und Take-Profit Kombinationen.'
+                },
+                { 
+                  label: 'OTO (One-Triggers-Other)', 
+                  value: symbol.otoAllowed,
+                  tooltip: 'OTO Orders bestehen aus zwei Orders: Wenn die erste ausgeführt wird, wird die zweite automatisch ausgelöst.'
+                },
+                { 
+                  label: 'Cancel Replace', 
+                  value: symbol.cancelReplaceAllowed,
+                  tooltip: 'Erlaubt es, bestehende Orders zu ändern, indem sie storniert und durch neue ersetzt werden.'
+                },
+                { 
+                  label: 'Amend', 
+                  value: symbol.amendAllowed,
+                  tooltip: 'Erlaubt es, bestehende Orders nachträglich anzupassen, ohne sie zu stornieren.'
+                },
+                { 
+                  label: 'Peg Instructions', 
+                  value: symbol.pegInstructionsAllowed,
+                  tooltip: 'Erlaubt spezielle Preis-Anpassungen für Orders, die sich automatisch an Marktbedingungen anpassen.'
+                },
+                { 
+                  label: 'Margin Trading', 
+                  value: symbol.isMarginTradingAllowed,
+                  tooltip: 'Erlaubt Trading mit geliehenen Mitteln (Hebelwirkung). Höhere Risiken durch mögliche Liquidationsverluste.'
+                },
               ].map((item, idx) => (
                 <div key={idx} className="flex items-center">
                   <span
@@ -103,7 +140,10 @@ export const CoinDetailsAccordion: React.FC<CoinDetailsAccordionProps> = ({ symb
                       item.value ? 'bg-green-500' : 'bg-gray-300'
                     }`}
                   />
-                  <span className="text-gray-700">{item.label}</span>
+                  <span className="text-gray-700 flex items-center gap-1">
+                    {item.label}
+                    <InfoTooltip content={item.tooltip} />
+                  </span>
                 </div>
               ))}
             </div>
@@ -111,18 +151,25 @@ export const CoinDetailsAccordion: React.FC<CoinDetailsAccordionProps> = ({ symb
 
           {/* Self Trade Prevention */}
           <section>
-            <h4 className="text-sm font-semibold text-gray-900 mb-3 pb-2 border-b border-gray-200">
+            <h4 className="text-sm font-semibold text-gray-900 mb-3 pb-2 border-b border-gray-200 flex items-center gap-1">
               Self Trade Prevention
+              <InfoTooltip content="Self Trade Prevention verhindert, dass Ihre eigenen Orders miteinander handeln:\n\n• NONE: Keine Verhinderung\n• EXPIRE_TAKER: Taker-Order läuft ab\n• EXPIRE_MAKER: Maker-Order läuft ab\n• EXPIRE_BOTH: Beide Orders laufen ab\n\nWichtig: Verhindert versehentliche Selbsttrades, die Gebühren verursachen würden." />
             </h4>
             <div className="space-y-2 text-sm">
               <div>
-                <span className="text-gray-500">Default Mode:</span>
+                <span className="text-gray-500 flex items-center gap-1">
+                  Default Mode:
+                  <InfoTooltip content="Der Standard-Modus für Self Trade Prevention.\n\nBestimmt, wie konfliktierende Orders behandelt werden, wenn keine explizite Einstellung vorgenommen wird." />
+                </span>
                 <span className="ml-2 font-medium text-gray-900">
                   {symbol.defaultSelfTradePreventionMode}
                 </span>
               </div>
               <div>
-                <span className="text-gray-500">Erlaubte Modi:</span>
+                <span className="text-gray-500 flex items-center gap-1">
+                  Erlaubte Modi:
+                  <InfoTooltip content="Liste aller verfügbaren Self Trade Prevention Modi für dieses Trading-Paar." />
+                </span>
                 <div className="mt-1 flex flex-wrap gap-1">
                   {symbol.allowedSelfTradePreventionModes.map((mode, idx) => (
                     <span
@@ -139,8 +186,9 @@ export const CoinDetailsAccordion: React.FC<CoinDetailsAccordionProps> = ({ symb
 
           {/* Permissions */}
           <section>
-            <h4 className="text-sm font-semibold text-gray-900 mb-3 pb-2 border-b border-gray-200">
+            <h4 className="text-sm font-semibold text-gray-900 mb-3 pb-2 border-b border-gray-200 flex items-center gap-1">
               Berechtigungen
+              <InfoTooltip content="Permissions definieren, welche Trading-Funktionen für dieses Paar verfügbar sind:\n\n• SPOT: Spot Trading erlaubt\n• MARGIN: Margin Trading erlaubt\n• FUTURES: Futures Trading erlaubt\n\nPermission Sets sind Kombinationen von Berechtigungen." />
             </h4>
             <div className="space-y-2 text-sm">
               <div>
@@ -180,8 +228,9 @@ export const CoinDetailsAccordion: React.FC<CoinDetailsAccordionProps> = ({ symb
 
           {/* Alle Filter Details */}
           <section>
-            <h4 className="text-sm font-semibold text-gray-900 mb-3 pb-2 border-b border-gray-200">
+            <h4 className="text-sm font-semibold text-gray-900 mb-3 pb-2 border-b border-gray-200 flex items-center gap-1">
               Vollständige Filter-Details
+              <InfoTooltip content="Alle verfügbaren Filter für dieses Trading-Paar:\n\n• PRICE_FILTER: Preisgrenzen und Tick Size\n• LOT_SIZE: Mengengrenzen für Limit Orders\n• MARKET_LOT_SIZE: Mengengrenzen für Market Orders\n• NOTIONAL: Mindest-/Maximalwert\n• ICEBERG_PARTS: Maximale Anzahl von Iceberg-Teilen\n• TRAILING_DELTA: Trailing Stop Parameter\n• PERCENT_PRICE_BY_SIDE: Prozentuale Preisgrenzen\n• MAX_NUM_ORDERS: Maximale Anzahl von Orders\n\nDiese Filter werden von Binance verwendet, um Orders zu validieren." />
             </h4>
             <div className="space-y-4">
               {/* Price Filter */}
@@ -208,18 +257,30 @@ export const CoinDetailsAccordion: React.FC<CoinDetailsAccordionProps> = ({ symb
               {/* Market Lot Size Filter */}
               {marketLotSizeFilter && (
                 <div className="bg-gray-50 rounded p-3">
-                  <h5 className="text-xs font-semibold text-gray-700 mb-2">MARKET_LOT_SIZE</h5>
+                  <h5 className="text-xs font-semibold text-gray-700 mb-2 flex items-center gap-1">
+                    MARKET_LOT_SIZE
+                    <InfoTooltip content="Mengen-Filter speziell für Market Orders:\n\nUnterscheidet sich von LOT_SIZE, da Market Orders sofort ausgeführt werden.\n\n• Min Qty: Minimale Menge für Market Orders\n• Max Qty: Maximale Menge für Market Orders\n• Step Size: Kleinste Mengenänderung für Market Orders" />
+                  </h5>
                   <div className="grid grid-cols-3 gap-2 text-xs">
                     <div>
-                      <span className="text-gray-500">Min Qty:</span>
+                      <span className="text-gray-500 flex items-center gap-1">
+                        Min Qty:
+                        <InfoTooltip content="Minimale Menge für Market Orders in Base Asset." />
+                      </span>
                       <span className="ml-1 font-mono">{formatDecimal(marketLotSizeFilter.minQty)}</span>
                     </div>
                     <div>
-                      <span className="text-gray-500">Max Qty:</span>
+                      <span className="text-gray-500 flex items-center gap-1">
+                        Max Qty:
+                        <InfoTooltip content="Maximale Menge für Market Orders in Base Asset." />
+                      </span>
                       <span className="ml-1 font-mono">{formatDecimal(marketLotSizeFilter.maxQty)}</span>
                     </div>
                     <div>
-                      <span className="text-gray-500">Step Size:</span>
+                      <span className="text-gray-500 flex items-center gap-1">
+                        Step Size:
+                        <InfoTooltip content="Kleinste Mengenänderung für Market Orders." />
+                      </span>
                       <span className="ml-1 font-mono">{formatDecimal(marketLotSizeFilter.stepSize)}</span>
                     </div>
                   </div>
