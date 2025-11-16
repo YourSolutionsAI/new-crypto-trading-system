@@ -39,6 +39,9 @@ export default function TradesPage() {
   const [currentTime, setCurrentTime] = useState(Date.now());
 
   const loadData = async () => {
+    const startTime = Date.now();
+    console.log('🔄 [TRADES] loadData gestartet um:', new Date().toLocaleTimeString());
+    
     try {
       const offset = (currentPage - 1) * ITEMS_PER_PAGE;
       const [tradesResult, positionsData, statsData] = await Promise.all([
@@ -46,12 +49,26 @@ export default function TradesPage() {
         getPositions().catch(() => []),
         getTradeStats().catch(() => ({ by_strategy: [], by_coin: [] })),
       ]);
+      
+      const endTime = Date.now();
+      const duration = ((endTime - startTime) / 1000).toFixed(2);
+      
+      console.log('✅ [TRADES] loadData fertig um:', new Date().toLocaleTimeString());
+      console.log(`⏱️  [TRADES] Dauer: ${duration} Sekunden`);
+      console.log('📊 [TRADES] Positionen geladen:', positionsData.length);
+      
+      // Zeige Preise der ersten Position (falls vorhanden)
+      if (positionsData.length > 0) {
+        const firstPos = positionsData[0];
+        console.log(`💰 [TRADES] Erste Position: ${firstPos.symbol} @ ${firstPos.currentPrice.toFixed(8)} USDT`);
+      }
+      
       setTrades(tradesResult.trades);
       setTotalTrades(tradesResult.total);
       setPositions(positionsData);
       setStats(statsData);
     } catch (error) {
-      console.error('Fehler beim Laden der Trades:', error);
+      console.error('❌ [TRADES] Fehler beim Laden:', error);
     } finally {
       setLoading(false);
     }
