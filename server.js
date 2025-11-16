@@ -2962,8 +2962,41 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
 
       // SCHRITT 4: Prüfe ob Trailing Stop ausgelöst wurde (Verkauf)
       // WICHTIG: Nur prüfen wenn trailing_stop_price bereits gesetzt ist
+      
+      // DEBUG: Logge alle relevanten Werte für Diagnose
+      console.log(`🔍 [${symbol}] Trailing Stop Debug:`, {
+        useTrailingStop: useTrailingStop,
+        stopLossPercent: stopLossPercent,
+        trailingStopPrice: trailingStopPrice,
+        trailingStopPriceType: typeof trailingStopPrice,
+        currentPrice: currentPrice,
+        currentPriceType: typeof currentPrice,
+        highestPrice: highestPrice,
+        entryPrice: entryPrice,
+        priceChangePercent: priceChangePercent.toFixed(4) + '%',
+        comparison: currentPrice <= trailingStopPrice,
+        isNull: trailingStopPrice === null,
+        isUndefined: trailingStopPrice === undefined,
+        isNaN: isNaN(trailingStopPrice),
+        difference: trailingStopPrice !== null && trailingStopPrice !== undefined && !isNaN(trailingStopPrice) 
+          ? (currentPrice - trailingStopPrice).toFixed(8) 
+          : 'N/A'
+      });
+      
       if (trailingStopPrice !== null && trailingStopPrice !== undefined && !isNaN(trailingStopPrice)) {
-        if (currentPrice <= trailingStopPrice) {
+        // Verwende kleine Toleranz für Floating-Point-Vergleiche
+        const tolerance = 0.00000001;
+        const shouldSell = currentPrice <= (trailingStopPrice + tolerance);
+        
+        console.log(`🔍 [${symbol}] Trailing Stop Verkaufsprüfung:`, {
+          currentPrice: currentPrice.toFixed(8),
+          trailingStopPrice: trailingStopPrice.toFixed(8),
+          tolerance: tolerance,
+          comparison: `${currentPrice.toFixed(8)} <= ${(trailingStopPrice + tolerance).toFixed(8)}`,
+          shouldSell: shouldSell
+        });
+        
+        if (shouldSell) {
           const trailingPriceChangePercent = ((currentPrice - highestPrice) / highestPrice) * 100;
           
           console.log('');
@@ -3014,8 +3047,35 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
           }
 
           continue; // Überspringe Take-Profit Prüfung
+        } else {
+          // DEBUG: Warum wird nicht verkauft?
+          const diff = currentPrice - trailingStopPrice;
+          console.log(`⚠️  [${symbol}] Trailing Stop NICHT ausgelöst:`, {
+            currentPrice: currentPrice.toFixed(8),
+            trailingStopPrice: trailingStopPrice.toFixed(8),
+            difference: diff.toFixed(8),
+            differencePercent: ((diff / trailingStopPrice) * 100).toFixed(6) + '%',
+            reason: diff > 0 ? 'Preis liegt ÜBER Trailing Stop' : 'Unbekannter Grund'
+          });
         }
+      } else {
+        // DEBUG: Trailing Stop Price ist nicht gesetzt
+        console.log(`⚠️  [${symbol}] Trailing Stop Price ist nicht gesetzt:`, {
+          trailingStopPrice: trailingStopPrice,
+          isNull: trailingStopPrice === null,
+          isUndefined: trailingStopPrice === undefined,
+          isNaN: isNaN(trailingStopPrice),
+          useTrailingStop: useTrailingStop,
+          stopLossPercent: stopLossPercent
+        });
       }
+    } else {
+      // DEBUG: Trailing Stop ist nicht aktiviert
+      console.log(`⚠️  [${symbol}] Trailing Stop ist nicht aktiviert:`, {
+        useTrailingStop: useTrailingStop,
+        stopLossPercent: stopLossPercent,
+        reason: !useTrailingStop ? 'useTrailingStop ist false' : 'stopLossPercent ist 0'
+      });
     }
 
     // STATISCHER STOP-LOSS LOGIK (wenn Trailing Stop nicht aktiv oder noch nicht aktiviert)
