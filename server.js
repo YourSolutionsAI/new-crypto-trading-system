@@ -2816,35 +2816,87 @@ function analyzePrice(currentPrice, strategy) {
  * @param {string} symbol - Das Trading-Symbol
  */
 async function checkStopLossTakeProfit(currentPrice, symbol) {
-  // Prüfe alle offenen Positionen für dieses Symbol
-  for (const [positionKey, position] of openPositions.entries()) {
-    if (position.symbol !== symbol) continue;
-
-    // Position-Check: Stelle sicher dass Position noch existiert (Race Condition Schutz)
-    if (!openPositions.has(positionKey)) {
-      continue;
+  // KRITISCH: Prüfe Positionen direkt aus der DATENBANK (wie canTrade es tut)
+  // Die In-Memory Map kann leer oder veraltet sein - daher DB als Quelle der Wahrheit!
+  const { data: dbPositions, error } = await supabase
+    .from('positions')
+    .select('*')
+    .eq('symbol', symbol)
+    .in('status', ['open', 'partial'])
+    .gt('quantity', 0);
+  
+  if (error) {
+    console.error(`❌ Fehler beim Laden der Positionen für ${symbol}:`, error);
+    return;
+  }
+  
+  if (!dbPositions || dbPositions.length === 0) {
+    // Keine Positionen in DB - bereinige In-Memory Map falls vorhanden
+    const positionsInMemory = Array.from(openPositions.entries()).filter(
+      ([key, pos]) => pos.symbol === symbol
+    );
+    if (positionsInMemory.length > 0) {
+      console.log(`🧹 [${symbol}] Bereinige ${positionsInMemory.length} veraltete Position(en) aus Memory`);
+      for (const [key, pos] of positionsInMemory) {
+        openPositions.delete(key);
+      }
     }
-
+    return;
+  }
+  
+  // Prüfe jede Position aus der Datenbank
+  for (const dbPosition of dbPositions) {
+    const positionKey = `${dbPosition.strategy_id}_${symbol}`;
+    
     // Finde die zugehörige Strategie
-    const strategy = activeStrategies.find(s => s.id === position.strategyId);
+    const strategy = activeStrategies.find(s => s.id === dbPosition.strategy_id);
     if (!strategy) {
       console.warn(`⚠️  Keine Strategie gefunden für Position ${positionKey}`);
       continue;
     }
-
+    
     // Hole Stop-Loss und Take-Profit aus Strategie-Config
     const stopLossPercent = strategy.config.risk?.stop_loss_percent ?? 0;
     const takeProfitPercent = strategy.config.risk?.take_profit_percent ?? 0;
     const useTrailingStop = strategy.config.risk?.use_trailing_stop === true;
     const activationThreshold = strategy.config.risk?.trailing_stop_activation_threshold ?? 0;
-
+    
     // Wenn beide deaktiviert sind, überspringe
     if (stopLossPercent === 0 && takeProfitPercent === 0) {
       continue;
     }
-
+    
+    // Lade Position-Daten aus DB
+    const entryPrice = parseFloat(dbPosition.entry_price);
+    const quantity = parseFloat(dbPosition.quantity);
+    const highestPrice = dbPosition.highest_price ? parseFloat(dbPosition.highest_price) : entryPrice;
+    const trailingStopPrice = dbPosition.trailing_stop_price ? parseFloat(dbPosition.trailing_stop_price) : null;
+    
     // Berechne Preisänderung in Prozent (relativ zum Entry Price)
-    const priceChangePercent = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
+    const priceChangePercent = ((currentPrice - entryPrice) / entryPrice) * 100;
+    
+    // Synchronisiere In-Memory Map mit DB (für schnellen Zugriff)
+    const position = openPositions.has(positionKey) 
+      ? openPositions.get(positionKey)
+      : {
+          symbol: symbol,
+          entryPrice: entryPrice,
+          quantity: quantity,
+          orderId: dbPosition.id,
+          timestamp: new Date(dbPosition.opened_at),
+          strategyId: dbPosition.strategy_id,
+          highestPrice: highestPrice,
+          trailingStopPrice: trailingStopPrice,
+          useTrailingStop: dbPosition.use_trailing_stop === true,
+          trailingStopActivationThreshold: dbPosition.trailing_stop_activation_threshold ? parseFloat(dbPosition.trailing_stop_activation_threshold) : 0
+        };
+    
+    // Update In-Memory Map mit aktuellen DB-Werten
+    position.entryPrice = entryPrice;
+    position.quantity = quantity;
+    position.highestPrice = highestPrice;
+    position.trailingStopPrice = trailingStopPrice;
+    openPositions.set(positionKey, position);
 
     // TRAILING STOP LOSS LOGIK
     if (useTrailingStop && stopLossPercent > 0) {
@@ -2899,7 +2951,8 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
               trailing_stop_price: trailingStopPrice,
               updated_at: new Date().toISOString()
             })
-            .eq('strategy_id', position.strategyId)
+            .eq('id', dbPosition.id)
+            .eq('strategy_id', dbPosition.strategy_id)
             .eq('symbol', symbol)
             .eq('status', 'open')
             .then(() => {
