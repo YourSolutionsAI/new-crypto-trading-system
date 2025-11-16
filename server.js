@@ -64,6 +64,7 @@ let lastTradeTimes = new Map(); // Map<symbol, number> - Trade-Cooldown pro Symb
 let tradesInProgress = new Map(); // Map<symbol, Promise> - Trade-Lock pro Symbol (verhindert Doppelausführungen)
 let tradeQueues = new Map(); // Map<symbol, Promise> - Queue für Trades pro Symbol (verhindert Race Conditions)
 let openPositions = new Map(); // Tracking offener Positionen (bereits symbol-spezifisch: ${strategy.id}_${symbol})
+let pendingSellSignals = new Map(); // Map<positionKey, {timestamp, reason, exitReason}> - Verhindert mehrfache Verkaufssignale
 let botSettings = {}; // Bot-Einstellungen aus Supabase
 let lotSizes = {}; // Lot Size Regeln aus Supabase
 let settingsReloadInterval = null; // Interval für automatisches Neuladen der Einstellungen
@@ -275,6 +276,14 @@ async function validateAndCleanupPosition(strategyId, symbol) {
       // Stelle sicher, dass Position wirklich geschlossen ist
       if (position && position.status !== 'closed') {
         console.log(`🔧 Bereinige Position in DB: ${symbol} (quantity: ${position.quantity})`);
+        
+        // Entferne Verkaufssignal-State wenn Position geschlossen wird
+        const positionKey = `${strategyId}_${symbol}`;
+        if (pendingSellSignals.has(positionKey)) {
+          console.log(`🧹 [${symbol}] Entferne Verkaufssignal-State (Position wird geschlossen)`);
+          pendingSellSignals.delete(positionKey);
+        }
+        
         await supabase
           .from('positions')
           .update({
@@ -477,6 +486,12 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, closeReason =
           openPositions.delete(positionKey);
         }
         
+        // Entferne Verkaufssignal-State wenn Position geschlossen wurde
+        if (pendingSellSignals.has(positionKey)) {
+          console.log(`🧹 [${symbol}] Entferne Verkaufssignal-State (Position geschlossen)`);
+          pendingSellSignals.delete(positionKey);
+        }
+        
         // Validiere nochmal um sicherzustellen
         await validateAndCleanupPosition(strategyId, symbol);
         
@@ -533,6 +548,12 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, closeReason =
       // Entferne aus der In-Memory Map
       if (openPositions.has(positionKey)) {
         openPositions.delete(positionKey);
+      }
+      
+      // Entferne Verkaufssignal-State wenn Position geschlossen wurde
+      if (pendingSellSignals.has(positionKey)) {
+        console.log(`🧹 [${symbol}] Entferne Verkaufssignal-State (Position geschlossen)`);
+        pendingSellSignals.delete(positionKey);
       }
       
       // KRITISCH: Validiere dass Position wirklich geschlossen ist
@@ -746,6 +767,13 @@ async function syncPositionWithBinance(strategyId, symbol) {
       // Guthaben bei Binance ist sehr klein oder 0 - Position schließen
       console.log(`🔒 Guthaben bei Binance zu klein (${actualBalance} < ${minTradeableQuantity}) - Schließe Position`);
       
+      // Entferne Verkaufssignal-State wenn Position geschlossen wird
+      const positionKey = `${strategyId}_${symbol}`;
+      if (pendingSellSignals.has(positionKey)) {
+        console.log(`🧹 [${symbol}] Entferne Verkaufssignal-State (Position wird automatisch geschlossen)`);
+        pendingSellSignals.delete(positionKey);
+      }
+      
       const { error: updateError } = await supabase
         .from('positions')
         .update({
@@ -762,7 +790,6 @@ async function syncPositionWithBinance(strategyId, symbol) {
       }
       
       // Entferne aus In-Memory Map
-      const positionKey = `${strategyId}_${symbol}`;
       if (openPositions.has(positionKey)) {
         openPositions.delete(positionKey);
       }
@@ -2856,6 +2883,23 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
   for (const dbPosition of dbPositions) {
     const positionKey = `${dbPosition.strategy_id}_${symbol}`;
     
+    // KRITISCH: Prüfe ob bereits ein Verkaufssignal für diese Position aktiv ist
+    // Verhindert mehrfache Signale bei jedem Preis-Update
+    const pendingSignal = pendingSellSignals.get(positionKey);
+    if (pendingSignal) {
+      const signalAge = Date.now() - pendingSignal.timestamp;
+      const maxSignalAge = 60000; // 60 Sekunden - Signal wird automatisch zurückgesetzt wenn zu alt
+      
+      if (signalAge < maxSignalAge) {
+        // Signal ist noch aktiv - überspringe weitere Prüfungen
+        continue;
+      } else {
+        // Signal ist zu alt - entferne es (möglicherweise hängengeblieben)
+        console.log(`🧹 [${symbol}] Entferne veraltetes Verkaufssignal (${Math.round(signalAge / 1000)}s alt)`);
+        pendingSellSignals.delete(positionKey);
+      }
+    }
+    
     // Finde die zugehörige Strategie
     const strategy = activeStrategies.find(s => s.id === dbPosition.strategy_id);
     if (!strategy) {
@@ -3035,6 +3079,13 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
             strategy_id: strategy.id
           });
 
+          // KRITISCH: Setze State, um mehrfache Signale zu verhindern
+          pendingSellSignals.set(positionKey, {
+            timestamp: Date.now(),
+            reason: 'Trailing Stop-Loss ausgelöst',
+            exitReason: 'trailing_stop'
+          });
+
           // Erstelle SELL-Signal für Trailing Stop-Loss
           const trailingStopSignal = {
             action: 'sell',
@@ -3052,7 +3103,18 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
 
           // Trade ausführen
           if (tradingEnabled && binanceClient) {
-            await executeTrade(trailingStopSignal, strategy);
+            try {
+              await executeTrade(trailingStopSignal, strategy);
+            } catch (error) {
+              // Bei Fehler: State nach 30 Sekunden zurücksetzen (falls Trade fehlgeschlagen)
+              console.error(`❌ Fehler beim Trailing Stop Trade: ${error.message}`);
+              setTimeout(() => {
+                if (pendingSellSignals.has(positionKey)) {
+                  console.log(`🔄 [${symbol}] Setze Verkaufssignal zurück nach Fehler`);
+                  pendingSellSignals.delete(positionKey);
+                }
+              }, 30000); // 30 Sekunden
+            }
           }
 
           continue; // Überspringe Take-Profit Prüfung
@@ -3111,6 +3173,13 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
         strategy_id: strategy.id
       });
 
+      // KRITISCH: Setze State, um mehrfache Signale zu verhindern
+      pendingSellSignals.set(positionKey, {
+        timestamp: Date.now(),
+        reason: 'Stop-Loss ausgelöst',
+        exitReason: 'stop_loss'
+      });
+
       // Erstelle SELL-Signal für Stop-Loss
       const stopLossSignal = {
         action: 'sell',
@@ -3128,7 +3197,18 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
 
       // Trade ausführen
       if (tradingEnabled && binanceClient) {
-        await executeTrade(stopLossSignal, strategy);
+        try {
+          await executeTrade(stopLossSignal, strategy);
+        } catch (error) {
+          // Bei Fehler: State nach 30 Sekunden zurücksetzen (falls Trade fehlgeschlagen)
+          console.error(`❌ Fehler beim Stop-Loss Trade: ${error.message}`);
+          setTimeout(() => {
+            if (pendingSellSignals.has(positionKey)) {
+              console.log(`🔄 [${symbol}] Setze Verkaufssignal zurück nach Fehler`);
+              pendingSellSignals.delete(positionKey);
+            }
+          }, 30000); // 30 Sekunden
+        }
       }
 
       continue; // Überspringe Take-Profit Prüfung
@@ -3163,6 +3243,13 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
         strategy_id: strategy.id
       });
 
+      // KRITISCH: Setze State, um mehrfache Signale zu verhindern
+      pendingSellSignals.set(positionKey, {
+        timestamp: Date.now(),
+        reason: 'Take-Profit ausgelöst',
+        exitReason: 'take_profit'
+      });
+
       // Erstelle SELL-Signal für Take-Profit
       const takeProfitSignal = {
         action: 'sell',
@@ -3180,7 +3267,18 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
 
       // Trade ausführen
       if (tradingEnabled && binanceClient) {
-        await executeTrade(takeProfitSignal, strategy);
+        try {
+          await executeTrade(takeProfitSignal, strategy);
+        } catch (error) {
+          // Bei Fehler: State nach 30 Sekunden zurücksetzen (falls Trade fehlgeschlagen)
+          console.error(`❌ Fehler beim Take-Profit Trade: ${error.message}`);
+          setTimeout(() => {
+            if (pendingSellSignals.has(positionKey)) {
+              console.log(`🔄 [${symbol}] Setze Verkaufssignal zurück nach Fehler`);
+              pendingSellSignals.delete(positionKey);
+            }
+          }, 30000); // 30 Sekunden
+        }
       }
     }
   }
@@ -3908,6 +4006,11 @@ async function executeTrade(signal, strategy) {
           // Update In-Memory Map
           if (result.action === 'closed') {
             openPositions.delete(positionKey);
+            // KRITISCH: Entferne Verkaufssignal-State wenn Position geschlossen wurde
+            if (pendingSellSignals.has(positionKey)) {
+              console.log(`✅ [${symbol}] Verkaufssignal-State entfernt (Position geschlossen)`);
+              pendingSellSignals.delete(positionKey);
+            }
           } else if (result.remaining_quantity > 0) {
             const memPos = openPositions.get(positionKey);
             if (memPos) {
@@ -4719,6 +4822,36 @@ async function createWebSocketConnection(symbol, strategies) {
 
         // Kauf- oder Verkauf-Signal
         if (signal.action === 'buy' || signal.action === 'sell') {
+          // KRITISCH: Bei SELL-Signalen prüfe ob bereits ein Verkaufssignal aktiv ist
+          if (signal.action === 'sell') {
+            const positionKey = `${strategy.id}_${symbol}`;
+            const pendingSignal = pendingSellSignals.get(positionKey);
+            if (pendingSignal) {
+              const signalAge = Date.now() - pendingSignal.timestamp;
+              const maxSignalAge = 60000; // 60 Sekunden
+              
+              if (signalAge < maxSignalAge) {
+                // Signal ist noch aktiv - überspringe dieses Signal
+                console.log(`⏭️  [${symbol}] SELL-Signal übersprungen: Bereits aktives Verkaufssignal vorhanden (${pendingSignal.reason})`);
+                continue;
+              } else {
+                // Signal ist zu alt - entferne es
+                console.log(`🧹 [${symbol}] Entferne veraltetes Verkaufssignal (${Math.round(signalAge / 1000)}s alt)`);
+                pendingSellSignals.delete(positionKey);
+              }
+            }
+            
+            // Setze State für MA Cross Signale
+            if (signal.exitReason === 'ma_cross') {
+              const positionKey = `${strategy.id}_${symbol}`;
+              pendingSellSignals.set(positionKey, {
+                timestamp: Date.now(),
+                reason: 'MA Cross Signal',
+                exitReason: 'ma_cross'
+              });
+            }
+          }
+          
           // Signal-Cooldown prüfen (pro Symbol, aus Strategie-Config)
           const now = Date.now();
           const lastSignalTime = lastSignalTimes.get(symbol) || 0;
@@ -4778,21 +4911,44 @@ async function createWebSocketConnection(symbol, strategies) {
               strategy_id: strategy.id
             });
             
-            const tradeResult = await executeTrade(signal, strategy);
-            
-            if (tradeResult) {
-              console.log(`✅ [${symbol}] Trade erfolgreich ausgeführt: ${signal.action.toUpperCase()} @ ${signal.price} USDT`);
-              await logBotEvent('info', `Trade erfolgreich ausgeführt: ${signal.action.toUpperCase()}`, {
-                action: signal.action,
-                price: signal.price,
-                symbol: symbol,
-                orderId: tradeResult.orderId,
-                strategy_id: strategy.id
-              });
-              // WICHTIG: Nach erfolgreichem Trade brechen wir ab, um Doppelausführungen zu vermeiden
-              break;
-            } else {
-              console.log(`⚠️  [${symbol}] Trade nicht ausgeführt (Cooldown oder andere Checks)`);
+            try {
+              const tradeResult = await executeTrade(signal, strategy);
+              
+              // Bei erfolgreichem SELL-Trade: State zurücksetzen
+              if (signal.action === 'sell' && tradeResult) {
+                const positionKey = `${strategy.id}_${symbol}`;
+                if (pendingSellSignals.has(positionKey)) {
+                  console.log(`✅ [${symbol}] Verkaufssignal-State entfernt (Trade erfolgreich)`);
+                  pendingSellSignals.delete(positionKey);
+                }
+              }
+              
+              if (tradeResult) {
+                console.log(`✅ [${symbol}] Trade erfolgreich ausgeführt: ${signal.action.toUpperCase()} @ ${signal.price} USDT`);
+                await logBotEvent('info', `Trade erfolgreich ausgeführt: ${signal.action.toUpperCase()}`, {
+                  action: signal.action,
+                  price: signal.price,
+                  symbol: symbol,
+                  orderId: tradeResult.orderId,
+                  strategy_id: strategy.id
+                });
+                // WICHTIG: Nach erfolgreichem Trade brechen wir ab, um Doppelausführungen zu vermeiden
+                break;
+              } else {
+                console.log(`⚠️  [${symbol}] Trade nicht ausgeführt (Cooldown oder andere Checks)`);
+              }
+            } catch (tradeError) {
+              console.error(`❌ [${symbol}] Fehler beim Trade: ${tradeError.message}`);
+              // Bei Fehler: State nach 30 Sekunden zurücksetzen (falls Trade fehlgeschlagen)
+              if (signal.action === 'sell') {
+                const positionKey = `${strategy.id}_${symbol}`;
+                setTimeout(() => {
+                  if (pendingSellSignals.has(positionKey)) {
+                    console.log(`🔄 [${symbol}] Setze Verkaufssignal zurück nach Fehler`);
+                    pendingSellSignals.delete(positionKey);
+                  }
+                }, 30000); // 30 Sekunden
+              }
             }
           } else {
             console.log(`💡 [${symbol}] Trading deaktiviert - Nur Signal-Generierung`);
