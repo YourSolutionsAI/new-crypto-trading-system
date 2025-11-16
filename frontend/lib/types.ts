@@ -18,6 +18,7 @@ export interface Trade {
   executed_at?: string;
   created_at: string;
   order_id?: string;
+  exit_reason?: 'trailing_stop' | 'stop_loss' | 'take_profit' | 'ma_cross' | 'manual' | 'other'; // NEU: Exit-Grund
   metadata?: any;
 }
 

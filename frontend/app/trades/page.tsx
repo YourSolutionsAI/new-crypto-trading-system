@@ -421,61 +421,99 @@ export default function TradesPage() {
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         Status
                       </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Exit-Grund
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {trades.map((trade) => (
-                      <tr key={trade.id}>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {format(
-                            new Date(trade.created_at),
-                            "dd.MM.yyyy HH:mm:ss"
-                          )}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
-                          {trade.symbol}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap">
-                          <span
-                            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                              isBuy(trade.side)
-                                ? 'bg-green-100 text-green-800'
-                                : 'bg-red-100 text-red-800'
-                            }`}
-                          >
-                            {trade.side.toUpperCase()}
-                          </span>
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {(trade.price || 0).toFixed(8)}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {(trade.quantity || 0).toFixed(8)}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                          {((trade as any).total && (trade as any).total !== null) 
-                            ? ((trade as any).total ?? 0).toFixed(2) 
-                            : ((trade.price || 0) * (trade.quantity || 0)).toFixed(2)} USDT
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm">
-                          {trade.pnl !== undefined && trade.pnl !== null ? (
+                    {trades.map((trade) => {
+                      const getExitReasonLabel = (reason?: string) => {
+                        switch (reason) {
+                          case 'trailing_stop': return 'Trailing Stop';
+                          case 'stop_loss': return 'Stop Loss';
+                          case 'take_profit': return 'Take Profit';
+                          case 'ma_cross': return 'MA Cross';
+                          case 'manual': return 'Manuell';
+                          case 'other': return 'Andere';
+                          default: return '-';
+                        }
+                      };
+
+                      const getExitReasonColor = (reason?: string) => {
+                        switch (reason) {
+                          case 'trailing_stop': return 'bg-purple-100 text-purple-800';
+                          case 'stop_loss': return 'bg-red-100 text-red-800';
+                          case 'take_profit': return 'bg-green-100 text-green-800';
+                          case 'ma_cross': return 'bg-blue-100 text-blue-800';
+                          case 'manual': return 'bg-gray-100 text-gray-800';
+                          case 'other': return 'bg-yellow-100 text-yellow-800';
+                          default: return 'bg-gray-50 text-gray-400';
+                        }
+                      };
+
+                      return (
+                        <tr key={trade.id}>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {format(
+                              new Date(trade.created_at),
+                              "dd.MM.yyyy HH:mm:ss"
+                            )}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+                            {trade.symbol}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
                             <span
-                              className={`font-medium ${
-                                trade.pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                              className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                                isBuy(trade.side)
+                                  ? 'bg-green-100 text-green-800'
+                                  : 'bg-red-100 text-red-800'
                               }`}
                             >
-                              {trade.pnl >= 0 ? '+' : ''}
-                              {(trade.pnl ?? 0).toFixed(2)} USDT
+                              {trade.side.toUpperCase()}
                             </span>
-                          ) : (
-                            <span className="text-gray-400">-</span>
-                          )}
-                        </td>
-                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-                          {trade.status}
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {(trade.price || 0).toFixed(8)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {(trade.quantity || 0).toFixed(8)}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+                            {((trade as any).total && (trade as any).total !== null) 
+                              ? ((trade as any).total ?? 0).toFixed(2) 
+                              : ((trade.price || 0) * (trade.quantity || 0)).toFixed(2)} USDT
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                            {trade.pnl !== undefined && trade.pnl !== null ? (
+                              <span
+                                className={`font-medium ${
+                                  trade.pnl >= 0 ? 'text-green-600' : 'text-red-600'
+                                }`}
+                              >
+                                {trade.pnl >= 0 ? '+' : ''}
+                                {(trade.pnl ?? 0).toFixed(2)} USDT
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">-</span>
+                            )}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+                            {trade.status}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm">
+                            {!isBuy(trade.side) && trade.exit_reason ? (
+                              <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${getExitReasonColor(trade.exit_reason)}`}>
+                                {getExitReasonLabel(trade.exit_reason)}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">-</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>

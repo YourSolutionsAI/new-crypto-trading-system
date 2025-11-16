@@ -329,7 +329,7 @@ async function validateAndCleanupPosition(strategyId, symbol) {
   }
 }
 
-async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 0) {
+async function reduceOrClosePosition(strategyId, symbol, quantity, closeReason = null, retryCount = 0) {
   try {
     // Verhindere Endlosschleifen bei Retries
     if (retryCount > 1) {
@@ -399,6 +399,10 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 
       updateData.status = 'closed';
       updateData.closed_at = new Date().toISOString();
       updateData.quantity = 0;
+      // Setze close_reason wenn angegeben
+      if (closeReason) {
+        updateData.close_reason = closeReason;
+      }
     } else {
       // Dies sollte eigentlich nie passieren, da es nur volle Verkäufe gibt
       // Aber für Sicherheit behalten wir es als Fallback
@@ -443,7 +447,8 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 
               quantity: 0,
               status: 'closed',
               closed_at: new Date().toISOString(),
-              updated_at: new Date().toISOString()
+              updated_at: new Date().toISOString(),
+              ...(closeReason ? { close_reason: closeReason } : {})
             })
             .eq('id', position.id);
           
@@ -1910,9 +1915,11 @@ app.post('/api/sell', async (req, res) => {
         status: 'executed',
         executed_at: new Date().toISOString(),
         pnl: null, // Kein PnL für manuelle Trades ohne Entry-Preis
+        exit_reason: 'manual', // NEU: Manueller Verkauf
         metadata: {
           manual: true,
           asset: asset,
+          exit_reason: 'manual', // Auch in metadata
           order: {
             orderId: order.orderId,
             clientOrderId: order.clientOrderId,
@@ -2730,6 +2737,7 @@ function generateSignal(currentPrice, strategy, priceHistory) {
       action: 'sell',
       price: currentPrice,
       reason: `MA Crossover Bearish: MA${maShortPeriod}=${maShort.toFixed(2)} < MA${maLongPeriod}=${maLong.toFixed(2)}${additionalReasons.length > 0 ? ' | ' + additionalReasons.join(', ') : ''}`,
+      exitReason: 'ma_cross', // NEU: Exit-Grund
       maShort: maShort.toFixed(2),
       maLong: maLong.toFixed(2),
       difference: difference.toFixed(2),
@@ -3035,6 +3043,7 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
             stopLoss: true,
             takeProfit: false,
             trailingStop: true,
+            exitReason: 'trailing_stop', // NEU: Exit-Grund
             _positionData: position
           };
 
@@ -3110,6 +3119,7 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
         stopLoss: true,
         takeProfit: false,
         trailingStop: false,
+        exitReason: 'stop_loss', // NEU: Exit-Grund
         _positionData: position
       };
 
@@ -3161,6 +3171,7 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
         stopLoss: false,
         takeProfit: true,
         trailingStop: false,
+        exitReason: 'take_profit', // NEU: Exit-Grund
         _positionData: position
       };
 
@@ -3856,7 +3867,15 @@ async function executeTrade(signal, strategy) {
     } else {
       // SELL - Position reduzieren oder schließen
       try {
-        const result = await reduceOrClosePosition(strategy.id, symbol, executedQty);
+        // Bestimme Exit-Grund aus Signal
+        const exitReason = signal.exitReason || 
+                          (signal.trailingStop ? 'trailing_stop' :
+                           signal.stopLoss ? 'stop_loss' :
+                           signal.takeProfit ? 'take_profit' :
+                           signal.reason?.includes('MA Cross') ? 'ma_cross' :
+                           'other');
+        
+        const result = await reduceOrClosePosition(strategy.id, symbol, executedQty, exitReason);
         
         if (result.action === 'no_position') {
           console.error(`❌ WARNUNG: SELL ohne offene Position für ${symbol}`);
@@ -4040,7 +4059,17 @@ async function saveTradeToDatabase(order, signal, strategy) {
     // PnL berechnen (bei SELL)
     let pnl = null;
     let pnlPercent = null;
+    let exitReason = null;
     if (signal.action === 'sell') {
+      // Bestimme Exit-Grund aus Signal
+      exitReason = signal.exitReason || 
+                   (signal.trailingStop ? 'trailing_stop' :
+                    signal.stopLoss ? 'stop_loss' :
+                    signal.takeProfit ? 'take_profit' :
+                    signal.reason?.includes('MA Cross') ? 'ma_cross' :
+                    signal.metadata?.manual ? 'manual' :
+                    'other');
+      
       // Verwende die entry_price die im Signal gespeichert wurde (aus der DB)
       const entryPrice = signal._entryPrice;
       if (entryPrice && entryPrice > 0) {
@@ -4054,31 +4083,45 @@ async function saveTradeToDatabase(order, signal, strategy) {
 
     // SCHICHT 4: Database-Level Idempotenz (UNIQUE Constraint auf order_id)
     // Versuche Trade einzufügen - falls order_id bereits existiert, wird ein Fehler zurückgegeben
+    const tradeData = {
+      strategy_id: strategy.id,
+      symbol: symbol,
+      side: signal.action,
+      price: avgPrice,
+      quantity: executedQty,
+      total: total,
+      order_id: order.orderId.toString(),
+      status: 'executed',
+      executed_at: new Date().toISOString(),
+      pnl: pnl,
+      pnl_percent: pnlPercent,
+      metadata: {
+        signal: signal,
+        order: {
+          orderId: order.orderId,
+          clientOrderId: order.clientOrderId,
+          transactTime: order.transactTime,
+          fills: order.fills
+        },
+        exit_reason: exitReason, // Auch in metadata für Rückwärtskompatibilität
+        exit_details: {
+          reason: signal.reason,
+          trailingStop: signal.trailingStop || false,
+          stopLoss: signal.stopLoss || false,
+          takeProfit: signal.takeProfit || false
+        },
+        testnet: true
+      }
+    };
+    
+    // Füge exit_reason hinzu wenn SELL-Trade
+    if (signal.action === 'sell' && exitReason) {
+      tradeData.exit_reason = exitReason;
+    }
+    
     const { data, error } = await supabase
       .from('trades')
-      .insert({
-        strategy_id: strategy.id,
-        symbol: symbol,
-        side: signal.action,
-        price: avgPrice,
-        quantity: executedQty,
-        total: total,
-        order_id: order.orderId.toString(),
-        status: 'executed',
-        executed_at: new Date().toISOString(),
-        pnl: pnl,
-        pnl_percent: pnlPercent,
-        metadata: {
-          signal: signal,
-          order: {
-            orderId: order.orderId,
-            clientOrderId: order.clientOrderId,
-            transactTime: order.transactTime,
-            fills: order.fills
-          },
-          testnet: true
-        }
-      })
+      .insert(tradeData)
       .select();
 
     if (error) {
