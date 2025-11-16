@@ -194,6 +194,24 @@ export const getStrategies = async (): Promise<Strategy[]> => {
   }
 };
 
+export const createStrategy = async (
+  strategy: {
+    name: string;
+    description?: string;
+    config?: {
+      type?: string;
+      timeframe?: string;
+      indicators?: {
+        ma_short?: number;
+        ma_long?: number;
+      };
+    };
+  }
+): Promise<Strategy> => {
+  const response = await api.post('/api/strategies', strategy);
+  return response.data.strategy;
+};
+
 export const updateStrategy = async (
   id: string,
   updates: Partial<Strategy> | { config: Partial<Strategy['config']> }

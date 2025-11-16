@@ -1132,6 +1132,85 @@ app.get('/api/strategies', async (req, res) => {
 });
 
 /**
+ * Erstellt eine neue Basis-Strategie
+ */
+app.post('/api/strategies', async (req, res) => {
+  try {
+    const { name, description, config } = req.body;
+
+    // Validierung
+    if (!name || !name.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Strategie-Name ist erforderlich'
+      });
+    }
+
+    // Normalisiere Config-Struktur
+    let normalizedConfig = {
+      type: config?.type || 'simple_ma',
+      timeframe: config?.timeframe || '1h',
+      indicators: {
+        ...(config?.indicators || {}),
+        ma_short: config?.indicators?.ma_short || config?.ma_short,
+        ma_long: config?.indicators?.ma_long || config?.ma_long
+      }
+    };
+
+    // Entferne duplicate Felder
+    delete normalizedConfig.ma_short;
+    delete normalizedConfig.ma_long;
+
+    const strategyData = {
+      name: name.trim(),
+      description: description?.trim() || null,
+      active: false, // Neue Strategien sind standardmäßig inaktiv
+      config: normalizedConfig
+    };
+
+    const { data: strategy, error } = await supabase
+      .from('strategies')
+      .insert(strategyData)
+      .select()
+      .single();
+
+    if (error) {
+      // Prüfe auf Unique Constraint Verletzung
+      if (error.code === '23505') {
+        return res.status(400).json({
+          success: false,
+          message: 'Eine Strategie mit diesem Namen existiert bereits'
+        });
+      }
+      throw error;
+    }
+
+    // Normalisiere für Response
+    const responseConfig = strategy.config || {};
+    const normalizedStrategy = {
+      ...strategy,
+      config: {
+        type: responseConfig.type,
+        timeframe: responseConfig.timeframe,
+        indicators: responseConfig.indicators || {}
+      }
+    };
+
+    res.status(201).json({ 
+      success: true, 
+      strategy: normalizedStrategy 
+    });
+  } catch (error) {
+    console.error('Fehler beim Erstellen der Strategie:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Fehler beim Erstellen der Strategie',
+      error: error.message
+    });
+  }
+});
+
+/**
  * Aktualisiert eine Basis-Strategie (nur Indikatoren, Typ, Zeitrahmen)
  * NEU: Coin-spezifische Einstellungen werden NICHT hier geändert!
  */
