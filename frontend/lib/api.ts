@@ -159,6 +159,7 @@ export const getPositions = async (): Promise<Position[]> => {
       maLong: pos.maLong ?? null,
       maCrossSellPrice: pos.maCrossSellPrice ?? null,
       stopLossPrice: pos.stopLossPrice ?? null,
+      takeProfitPrice: pos.takeProfitPrice ?? null,
       trailingStopPrice: pos.trailingStopPrice ?? null,
       useTrailingStop: pos.useTrailingStop ?? false,
       // Cooldown Information
