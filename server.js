@@ -5,6 +5,7 @@ const WebSocket = require('ws');
 const { createClient } = require('@supabase/supabase-js');
 const Binance = require('binance-api-node').default;
 const ccxt = require('ccxt');
+const axios = require('axios');
 
 // Express-Server initialisieren
 const app = express();
@@ -1555,7 +1556,6 @@ app.post('/api/exchange-info/sync', async (req, res) => {
     console.log(`📊 Syncing ${symbolsToSync.length} symbols:`, symbolsToSync);
     
     // 2. Hole Exchange-Info von Binance (Testnet)
-    const axios = require('axios');
     const binanceUrl = 'https://testnet.binance.vision/api/v3/exchangeInfo';
     
     const response = await axios.get(binanceUrl, { timeout: 10000 });
@@ -1677,10 +1677,29 @@ app.post('/api/exchange-info/sync', async (req, res) => {
     
   } catch (error) {
     console.error('❌ Fehler beim Synchronisieren der Exchange-Info:', error);
+    console.error('Error Details:', {
+      message: error.message,
+      code: error.code,
+      response: error.response?.data,
+      stack: error.stack
+    });
+    
+    // Detaillierte Fehlermeldung für Frontend
+    let detailedMessage = 'Fehler beim Synchronisieren der Exchange-Informationen';
+    if (error.code === 'ENOTFOUND' || error.code === 'ECONNREFUSED') {
+      detailedMessage = 'Binance API nicht erreichbar. Prüfen Sie Ihre Internetverbindung.';
+    } else if (error.message?.includes('relation') || error.message?.includes('does not exist')) {
+      detailedMessage = 'Supabase-Tabellen fehlen. Bitte führen Sie das SQL-Setup aus (coin_exchange_info.sql).';
+    } else if (error.code === '42P01') {
+      detailedMessage = 'Tabelle "coin_exchange_info" oder "binance_rate_limits" existiert nicht. SQL-Setup ausführen!';
+    }
+    
     res.status(500).json({
       success: false,
-      message: 'Fehler beim Synchronisieren der Exchange-Informationen',
-      error: error.message
+      message: detailedMessage,
+      error: error.message,
+      code: error.code,
+      hint: 'Prüfen Sie die Backend-Logs für Details'
     });
   }
 });
