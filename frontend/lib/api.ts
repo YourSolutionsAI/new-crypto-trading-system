@@ -418,17 +418,30 @@ export const syncExchangeInfo = async (symbols?: string[]): Promise<{
   synced: number;
   errors?: Array<{ symbol: string; error: string }>;
   timestamp: string;
+  hint?: string;
+  code?: string;
+  sqlFile?: string;
 }> => {
   try {
     const response = await api.post('/api/exchange-info/sync', { symbols });
     return response.data;
   } catch (error: any) {
     console.error('Fehler beim Synchronisieren der Exchange-Info:', error);
-    throw new Error(
-      error.response?.data?.message || 
+    
+    // Detaillierte Fehlermeldung vom Backend verwenden
+    const backendError = error.response?.data;
+    const errorMessage = backendError?.message || 
       error.message || 
-      'Fehler beim Synchronisieren der Exchange-Informationen'
-    );
+      'Fehler beim Synchronisieren der Exchange-Informationen';
+    
+    // Erweitertes Error-Objekt mit Backend-Details
+    const enhancedError: any = new Error(errorMessage);
+    enhancedError.hint = backendError?.hint;
+    enhancedError.code = backendError?.code;
+    enhancedError.sqlFile = backendError?.sqlFile;
+    enhancedError.error = backendError?.error;
+    
+    throw enhancedError;
   }
 };
 

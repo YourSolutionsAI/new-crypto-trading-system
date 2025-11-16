@@ -1527,6 +1527,47 @@ app.post('/api/exchange-info/sync', async (req, res) => {
   try {
     console.log('🔄 Starting Exchange Info Sync...');
     
+    // Prüfe ob Tabellen existieren (frühe Validierung)
+    try {
+      const { error: testError } = await supabase
+        .from('binance_rate_limits')
+        .select('id')
+        .limit(1);
+      
+      if (testError && (testError.code === '42P01' || testError.message?.includes('does not exist') || testError.message?.includes('relation'))) {
+        console.error('❌ Tabelle binance_rate_limits existiert nicht!');
+        return res.status(500).json({
+          success: false,
+          message: '❌ Supabase-Tabellen fehlen! Bitte führen Sie das SQL-Setup aus.',
+          error: 'Tabelle "binance_rate_limits" existiert nicht',
+          hint: 'Führen Sie coin_exchange_info.sql in Supabase SQL Editor aus',
+          sqlFile: 'Supabase SQL Setups/coin_exchange_info.sql',
+          code: 'TABLE_NOT_FOUND'
+        });
+      }
+      
+      // Prüfe auch coin_exchange_info
+      const { error: coinTableError } = await supabase
+        .from('coin_exchange_info')
+        .select('symbol')
+        .limit(1);
+      
+      if (coinTableError && (coinTableError.code === '42P01' || coinTableError.message?.includes('does not exist') || coinTableError.message?.includes('relation'))) {
+        console.error('❌ Tabelle coin_exchange_info existiert nicht!');
+        return res.status(500).json({
+          success: false,
+          message: '❌ Supabase-Tabellen fehlen! Bitte führen Sie das SQL-Setup aus.',
+          error: 'Tabelle "coin_exchange_info" existiert nicht',
+          hint: 'Führen Sie coin_exchange_info.sql in Supabase SQL Editor aus',
+          sqlFile: 'Supabase SQL Setups/coin_exchange_info.sql',
+          code: 'TABLE_NOT_FOUND'
+        });
+      }
+    } catch (tableCheckError) {
+      console.error('⚠️  Table check error:', tableCheckError);
+      // Weiter machen, könnte auch andere Fehler sein
+    }
+    
     const { symbols: requestedSymbols } = req.body;
     
     // 1. Bestimme welche Symbole synchronisiert werden sollen
@@ -1540,7 +1581,10 @@ app.post('/api/exchange-info/sync', async (req, res) => {
         .from('coin_strategies')
         .select('symbol');
       
-      if (coinsError) throw coinsError;
+      if (coinsError) {
+        console.error('❌ Error loading coin_strategies:', coinsError);
+        throw coinsError;
+      }
       symbolsToSync = coinStrategies.map(cs => cs.symbol);
     }
     
@@ -1558,33 +1602,71 @@ app.post('/api/exchange-info/sync', async (req, res) => {
     // 2. Hole Exchange-Info von Binance (Testnet)
     const binanceUrl = 'https://testnet.binance.vision/api/v3/exchangeInfo';
     
-    const response = await axios.get(binanceUrl, { timeout: 10000 });
-    const exchangeInfo = response.data;
-    
-    console.log(`✅ Loaded ${exchangeInfo.symbols.length} symbols from Binance`);
+    let exchangeInfo;
+    try {
+      const response = await axios.get(binanceUrl, { timeout: 10000 });
+      exchangeInfo = response.data;
+      console.log(`✅ Loaded ${exchangeInfo.symbols.length} symbols from Binance`);
+    } catch (binanceError) {
+      console.error('❌ Binance API Error:', binanceError.message);
+      return res.status(500).json({
+        success: false,
+        message: 'Binance API nicht erreichbar',
+        error: binanceError.message,
+        code: binanceError.code,
+        hint: 'Prüfen Sie Ihre Internetverbindung oder ob Testnet verfügbar ist'
+      });
+    }
     
     // 2a. Synchronisiere Rate Limits (global, nicht pro Symbol)
     try {
       console.log('📊 Syncing Rate Limits...');
       
       // Lösche alte Rate Limits
-      await supabase.from('binance_rate_limits').delete().neq('id', 0);
+      const { error: deleteError } = await supabase.from('binance_rate_limits').delete().neq('id', 0);
+      if (deleteError) {
+        console.error('⚠️  Error deleting old rate limits:', deleteError);
+        if (deleteError.code === '42P01' || deleteError.message?.includes('does not exist')) {
+          throw new Error('Tabelle binance_rate_limits existiert nicht. SQL-Setup ausführen!');
+        }
+      }
       
-      // Füge neue Rate Limits ein
-      for (const rateLimit of exchangeInfo.rateLimits) {
-        await supabase.from('binance_rate_limits').insert({
-          rate_limit_type: rateLimit.rateLimitType,
-          interval: rateLimit.interval,
-          interval_num: rateLimit.intervalNum,
-          limit_value: rateLimit.limit,
-          last_updated_at: new Date().toISOString()
-        });
+      // Füge neue Rate Limits ein (Batch-Insert für Performance)
+      const rateLimitInserts = exchangeInfo.rateLimits.map(rateLimit => ({
+        rate_limit_type: rateLimit.rateLimitType,
+        interval: rateLimit.interval,
+        interval_num: rateLimit.intervalNum,
+        limit_value: rateLimit.limit,
+        last_updated_at: new Date().toISOString()
+      }));
+      
+      const { error: insertError } = await supabase
+        .from('binance_rate_limits')
+        .insert(rateLimitInserts);
+      
+      if (insertError) {
+        console.error('⚠️  Error inserting Rate Limits:', insertError);
+        if (insertError.code === '42P01' || insertError.message?.includes('does not exist')) {
+          throw new Error('Tabelle binance_rate_limits existiert nicht. SQL-Setup ausführen!');
+        }
+        throw insertError;
       }
       
       console.log(`✅ Synced ${exchangeInfo.rateLimits.length} Rate Limits`);
     } catch (rateLimitError) {
-      console.error('⚠️  Error syncing Rate Limits:', rateLimitError.message);
+      console.error('⚠️  Error syncing Rate Limits:', rateLimitError);
+      // Prüfe ob es ein Tabellen-Fehler ist
+      if (rateLimitError.code === '42P01' || rateLimitError.message?.includes('does not exist') || rateLimitError.message?.includes('existiert nicht')) {
+        return res.status(500).json({
+          success: false,
+          message: '❌ Tabelle "binance_rate_limits" existiert nicht!',
+          error: rateLimitError.message,
+          hint: 'Führen Sie coin_exchange_info.sql in Supabase aus',
+          code: 'TABLE_NOT_FOUND'
+        });
+      }
       // Fehler nicht werfen, da Symbole wichtiger sind
+      console.warn('⚠️  Rate Limits Sync fehlgeschlagen, aber Sync wird fortgesetzt');
     }
     
     // 3. Verarbeite jeden unserer Coins
@@ -1654,7 +1736,13 @@ app.post('/api/exchange-info/sync', async (req, res) => {
             returning: 'minimal'
           });
         
-        if (upsertError) throw upsertError;
+        if (upsertError) {
+          console.error(`❌ Upsert error for ${symbol}:`, upsertError);
+          if (upsertError.code === '42P01' || upsertError.message?.includes('does not exist') || upsertError.message?.includes('relation')) {
+            throw new Error('Tabelle coin_exchange_info existiert nicht. SQL-Setup ausführen!');
+          }
+          throw upsertError;
+        }
         
         results.push({ symbol, status: 'synced' });
         console.log(`✅ Synced ${symbol}`);

@@ -155,11 +155,27 @@ export default function CoinsPage() {
       await loadData();
     } catch (error: any) {
       console.error('❌ Sync error:', error);
-      setSyncMessage(`❌ Fehler: ${error.message}`);
+      
+      // Detaillierte Fehlermeldung zusammenstellen
+      let errorMsg = `❌ ${error.message}`;
+      
+      if (error.hint) {
+        errorMsg += `\n\n💡 ${error.hint}`;
+      }
+      
+      if (error.sqlFile) {
+        errorMsg += `\n\n📄 SQL-Datei: ${error.sqlFile}`;
+      }
+      
+      if (error.code === 'TABLE_NOT_FOUND') {
+        errorMsg += `\n\n🔧 Lösung: Öffnen Sie Supabase Dashboard → SQL Editor → Führen Sie die SQL-Datei aus`;
+      }
+      
+      setSyncMessage(errorMsg);
     } finally {
       setIsSyncing(false);
-      // Nachricht nach 5 Sekunden ausblenden
-      setTimeout(() => setSyncMessage(null), 5000);
+      // Nachricht nach 10 Sekunden ausblenden (länger für detaillierte Fehler)
+      setTimeout(() => setSyncMessage(null), 10000);
     }
   };
 
@@ -354,7 +370,7 @@ export default function CoinsPage() {
             syncMessage.startsWith('⚠️') ? 'bg-yellow-50 border border-yellow-200' :
             'bg-red-50 border border-red-200'
           }`}>
-            <p className={`text-sm ${
+            <p className={`text-sm whitespace-pre-line ${
               syncMessage.startsWith('✅') ? 'text-green-700' :
               syncMessage.startsWith('⚠️') ? 'text-yellow-700' :
               'text-red-700'
