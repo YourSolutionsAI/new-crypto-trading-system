@@ -26,42 +26,53 @@ export default function InfoTooltip({
   useEffect(() => {
     if (isVisible && tooltipRef.current && iconRef.current && position === 'auto') {
       const iconRect = iconRef.current.getBoundingClientRect();
-      const tooltipWidth = 500; // Feste Breite für Berechnung
+      const tooltipWidth = 500; // Feste Breite für top/bottom
+      const tooltipWidthSide = 350; // Breite für left/right
       const tooltipHeight = tooltipRef.current.offsetHeight;
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
       const spacing = 12;
+      const margin = 20;
 
       // Bevorzuge top/bottom für mehr Breite
       // Prüfe ob unten genug Platz ist
-      if (iconRect.bottom + tooltipHeight + spacing < viewportHeight - 20) {
+      if (iconRect.bottom + tooltipHeight + spacing < viewportHeight - margin) {
         setTooltipPosition('bottom');
         
         // Berechne horizontale Position (zentriert, aber innerhalb Viewport)
         let leftPos = iconRect.left + (iconRect.width / 2) - (tooltipWidth / 2);
-        if (leftPos < 20) leftPos = 20;
-        if (leftPos + tooltipWidth > viewportWidth - 20) leftPos = viewportWidth - tooltipWidth - 20;
+        if (leftPos < margin) leftPos = margin;
+        if (leftPos + tooltipWidth > viewportWidth - margin) leftPos = viewportWidth - tooltipWidth - margin;
         
         setAdjustedPosition({ left: leftPos, top: iconRect.bottom + spacing });
       } 
       // Prüfe ob oben genug Platz ist
-      else if (iconRect.top - tooltipHeight - spacing > 20) {
+      else if (iconRect.top - tooltipHeight - spacing > margin) {
         setTooltipPosition('top');
         
         let leftPos = iconRect.left + (iconRect.width / 2) - (tooltipWidth / 2);
-        if (leftPos < 20) leftPos = 20;
-        if (leftPos + tooltipWidth > viewportWidth - 20) leftPos = viewportWidth - tooltipWidth - 20;
+        if (leftPos < margin) leftPos = margin;
+        if (leftPos + tooltipWidth > viewportWidth - margin) leftPos = viewportWidth - tooltipWidth - margin;
         
         setAdjustedPosition({ left: leftPos, top: iconRect.top - tooltipHeight - spacing });
       }
-      // Fallback: rechts oder links
-      else if (iconRect.right + tooltipWidth + spacing < viewportWidth - 20) {
-        setTooltipPosition('right');
-      } else if (iconRect.left - tooltipWidth - spacing > 20) {
-        setTooltipPosition('left');
-      } else {
-        // Letzter Fallback: bottom mit angepasster Position
-        setTooltipPosition('bottom');
+      // Fallback: Prüfe zuerst RECHTS, dann LINKS
+      else {
+        const spaceRight = viewportWidth - iconRect.right;
+        const spaceLeft = iconRect.left;
+        
+        // Wenn rechts genug Platz (mindestens tooltipWidthSide + spacing + margin)
+        if (spaceRight >= tooltipWidthSide + spacing + margin) {
+          setTooltipPosition('right');
+        } 
+        // Wenn rechts zu wenig Platz, aber links genug
+        else if (spaceLeft >= tooltipWidthSide + spacing + margin) {
+          setTooltipPosition('left');
+        }
+        // Wenn weder rechts noch links genug Platz: Zwinge bottom mit gescrolltem Content
+        else {
+          setTooltipPosition('bottom');
+        }
       }
     }
   }, [isVisible, position]);
