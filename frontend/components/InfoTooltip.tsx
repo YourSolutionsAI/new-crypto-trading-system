@@ -15,53 +15,88 @@ interface InfoTooltipProps {
 export default function InfoTooltip({ 
   content, 
   position = 'auto',
-  maxWidth = '450px' 
+  maxWidth = '500px' 
 }: InfoTooltipProps) {
   const [isVisible, setIsVisible] = useState(false);
   const [tooltipPosition, setTooltipPosition] = useState(position);
+  const [adjustedPosition, setAdjustedPosition] = useState({ left: 0, top: 0 });
   const iconRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (isVisible && tooltipRef.current && iconRef.current && position === 'auto') {
       const iconRect = iconRef.current.getBoundingClientRect();
-      const tooltipRect = tooltipRef.current.getBoundingClientRect();
+      const tooltipWidth = 500; // Feste Breite für Berechnung
+      const tooltipHeight = tooltipRef.current.offsetHeight;
       const viewportWidth = window.innerWidth;
       const viewportHeight = window.innerHeight;
+      const spacing = 12;
 
-      // Prüfe ob Tooltip rechts über den Rand läuft
-      if (iconRect.right + tooltipRect.width > viewportWidth - 10) {
-        // Prüfe ob links genug Platz ist
-        if (iconRect.left - tooltipRect.width > 10) {
-          setTooltipPosition('left');
-        } else {
-          // Oben oder unten
-          if (iconRect.bottom + tooltipRect.height > viewportHeight - 10) {
-            setTooltipPosition('top');
-          } else {
-            setTooltipPosition('bottom');
-          }
-        }
-      } else {
-        // Standardmäßig rechts
+      // Bevorzuge top/bottom für mehr Breite
+      // Prüfe ob unten genug Platz ist
+      if (iconRect.bottom + tooltipHeight + spacing < viewportHeight - 20) {
+        setTooltipPosition('bottom');
+        
+        // Berechne horizontale Position (zentriert, aber innerhalb Viewport)
+        let leftPos = iconRect.left + (iconRect.width / 2) - (tooltipWidth / 2);
+        if (leftPos < 20) leftPos = 20;
+        if (leftPos + tooltipWidth > viewportWidth - 20) leftPos = viewportWidth - tooltipWidth - 20;
+        
+        setAdjustedPosition({ left: leftPos, top: iconRect.bottom + spacing });
+      } 
+      // Prüfe ob oben genug Platz ist
+      else if (iconRect.top - tooltipHeight - spacing > 20) {
+        setTooltipPosition('top');
+        
+        let leftPos = iconRect.left + (iconRect.width / 2) - (tooltipWidth / 2);
+        if (leftPos < 20) leftPos = 20;
+        if (leftPos + tooltipWidth > viewportWidth - 20) leftPos = viewportWidth - tooltipWidth - 20;
+        
+        setAdjustedPosition({ left: leftPos, top: iconRect.top - tooltipHeight - spacing });
+      }
+      // Fallback: rechts oder links
+      else if (iconRect.right + tooltipWidth + spacing < viewportWidth - 20) {
         setTooltipPosition('right');
+      } else if (iconRect.left - tooltipWidth - spacing > 20) {
+        setTooltipPosition('left');
+      } else {
+        // Letzter Fallback: bottom mit angepasster Position
+        setTooltipPosition('bottom');
       }
     }
   }, [isVisible, position]);
 
   const getTooltipClasses = () => {
-    const baseClasses = "absolute z-50 px-4 py-3 text-sm leading-relaxed text-white bg-gray-900 rounded-lg shadow-xl whitespace-normal";
+    const baseClasses = "absolute z-[9999] px-5 py-4 text-sm leading-relaxed text-white bg-gray-900 rounded-lg shadow-2xl";
     
     switch (tooltipPosition) {
       case 'top':
-        return `${baseClasses} bottom-full left-1/2 transform -translate-x-1/2 mb-2`;
+        return `${baseClasses} bottom-full mb-3`;
       case 'bottom':
-        return `${baseClasses} top-full left-1/2 transform -translate-x-1/2 mt-2`;
+        return `${baseClasses} top-full mt-3`;
       case 'left':
-        return `${baseClasses} right-full top-1/2 transform -translate-y-1/2 mr-2`;
+        return `${baseClasses} right-full top-1/2 transform -translate-y-1/2 mr-3`;
       case 'right':
       default:
-        return `${baseClasses} left-full top-1/2 transform -translate-y-1/2 ml-2`;
+        return `${baseClasses} left-full top-1/2 transform -translate-y-1/2 ml-3`;
+    }
+  };
+  
+  const getTooltipStyle = () => {
+    if (tooltipPosition === 'top' || tooltipPosition === 'bottom') {
+      // Bei top/bottom: feste Breite für bessere Lesbarkeit
+      return { 
+        width: maxWidth,
+        maxWidth: maxWidth,
+        minWidth: '400px'
+      };
+    } else {
+      // Bei left/right: maxWidth, aber mindestens 350px
+      return { 
+        width: maxWidth,
+        maxWidth: maxWidth,
+        minWidth: '350px'
+      };
     }
   };
 
@@ -102,13 +137,13 @@ export default function InfoTooltip({
         <div
           ref={tooltipRef}
           className={getTooltipClasses()}
-          style={{ maxWidth }}
+          style={getTooltipStyle()}
         >
           {/* Arrow */}
           <div className={getArrowClasses()} />
           
           {/* Content */}
-          <div className="relative z-10">
+          <div className="relative z-10 whitespace-pre-line">
             {content}
           </div>
         </div>
