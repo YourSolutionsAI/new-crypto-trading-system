@@ -324,18 +324,30 @@ export default function TradesPage() {
                           )}
                           
                           {/* Take Profit - nur wenn TSL nicht aktiv */}
-                          {!position.useTrailingStop && position.takeProfitPrice && (
-                            <div className="bg-green-50 p-2 rounded">
-                              <div className="flex items-center justify-between">
-                                <span className="text-gray-600 font-medium">Take Profit:</span>
-                                <span className="text-green-700 font-semibold">
-                                  {position.takeProfitPrice.toFixed(8)} USDT
-                                </span>
+                          {!position.useTrailingStop && (
+                            position.takeProfitPrice ? (
+                              <div className="bg-green-50 p-2 rounded">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600 font-medium">Take Profit:</span>
+                                  <span className="text-green-700 font-semibold">
+                                    {position.takeProfitPrice.toFixed(8)} USDT
+                                  </span>
+                                </div>
+                                <p className="text-gray-500 text-xs mt-1">
+                                  Gewinnziel
+                                </p>
                               </div>
-                              <p className="text-gray-500 text-xs mt-1">
-                                Gewinnziel
-                              </p>
-                            </div>
+                            ) : (
+                              <div className="bg-gray-50 p-2 rounded">
+                                <div className="flex items-center justify-between">
+                                  <span className="text-gray-600 font-medium">Take Profit:</span>
+                                  <span className="text-gray-500 text-xs">Nicht konfiguriert</span>
+                                </div>
+                                <p className="text-gray-400 text-xs mt-1">
+                                  In Coin-Einstellungen festlegen
+                                </p>
+                              </div>
+                            )
                           )}
                           
                           {/* Info wenn TSL aktiv ist */}

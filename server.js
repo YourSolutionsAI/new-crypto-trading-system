@@ -1715,6 +1715,16 @@ app.get('/api/positions', async (req, res) => {
             const takeProfitPercent = fullStrategyConfig.risk.take_profit_percent ?? 0;
             useTrailingStop = fullStrategyConfig.risk.use_trailing_stop === true;
             
+            // DEBUG: Logge Take Profit Config
+            if (position.symbol === 'BTCUSDT') {
+              console.log(`🔍 DEBUG Take Profit für ${position.symbol}:`, {
+                takeProfitPercent,
+                useTrailingStop,
+                entryPrice,
+                willCalculate: !useTrailingStop && takeProfitPercent > 0
+              });
+            }
+            
             // Stop Loss / Trailing Stop Loss
             if (stopLossPercent > 0) {
               if (useTrailingStop) {
@@ -1740,6 +1750,13 @@ app.get('/api/positions', async (req, res) => {
             // Take Profit (nur wenn TSL nicht aktiv)
             if (!useTrailingStop && takeProfitPercent > 0) {
               takeProfitPrice = entryPrice * (1 + takeProfitPercent / 100);
+              
+              // DEBUG: Logge berechneten Take Profit
+              if (position.symbol === 'BTCUSDT') {
+                console.log(`✅ Take Profit berechnet für ${position.symbol}: ${takeProfitPrice.toFixed(8)} USDT`);
+              }
+            } else if (position.symbol === 'BTCUSDT') {
+              console.log(`❌ Take Profit NICHT berechnet für ${position.symbol}: useTrailingStop=${useTrailingStop}, takeProfitPercent=${takeProfitPercent}`);
             }
           }
         } catch (configError) {
