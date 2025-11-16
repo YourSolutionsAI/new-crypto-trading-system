@@ -5,7 +5,7 @@ import InfoTooltip from './InfoTooltip';
 import { TOOLTIPS } from '@/lib/tooltips';
 
 interface CoinCoreInfoProps {
-  symbol: BinanceSymbol;
+  symbol: BinanceSymbol & { in_testnet_available?: boolean | null };
   className?: string;
 }
 
@@ -37,6 +37,20 @@ export const CoinCoreInfo: React.FC<CoinCoreInfoProps> = ({ symbol, className = 
     <div className={`space-y-4 ${className}`}>
       {/* Status & Basic Info */}
       <div className="flex flex-wrap items-center gap-2">
+        {/* Testnet Badge - ZUERST anzeigen */}
+        {symbol.in_testnet_available !== undefined && symbol.in_testnet_available !== null && (
+          <span
+            className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+              symbol.in_testnet_available
+                ? 'bg-emerald-100 text-emerald-800 border border-emerald-200'
+                : 'bg-orange-100 text-orange-800 border border-orange-200'
+            }`}
+            title={symbol.in_testnet_available ? 'Dieser Coin ist im Binance Testnet verfügbar und kann dort gehandelt werden' : 'Dieser Coin ist NICHT im Binance Testnet verfügbar. Nur Production-Trading möglich.'}
+          >
+            {symbol.in_testnet_available ? '✓ Testnet verfügbar' : '✗ Testnet nicht verfügbar'}
+          </span>
+        )}
+        
         {/* Status Badge */}
         <span
           className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${

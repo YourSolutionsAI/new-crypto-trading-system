@@ -13,6 +13,7 @@ export interface BinanceSymbol {
   stepSize: number;
   orderTypes: string[];
   isMarginTradingAllowed: boolean;
+  inTestnetAvailable?: boolean;
 }
 
 interface UseBinanceSymbolsResult {

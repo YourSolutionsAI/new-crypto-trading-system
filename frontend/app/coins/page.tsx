@@ -139,7 +139,8 @@ export default function CoinsPage() {
       permissionSets: info.permission_sets,
       defaultSelfTradePreventionMode: 'NONE',
       allowedSelfTradePreventionModes: [],
-    } as BinanceSymbol;
+      in_testnet_available: info.in_testnet_available
+    } as BinanceSymbol & { in_testnet_available?: boolean | null };
   };
 
   // Toggle-Funktion für Coin-Details

@@ -7,6 +7,7 @@ interface SymbolSearchDropdownProps {
     baseAsset: string;
     status: string;
     minNotional?: number; // Optional: Min USDT für Trading
+    inTestnetAvailable?: boolean; // Optional: Testnet-Verfügbarkeit
   }>;
   value: string;
   onChange: (symbol: string) => void;
@@ -178,11 +179,24 @@ export const SymbolSearchDropdown: React.FC<SymbolSearchDropdownProps> = ({
                 >
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex-1 min-w-0">
-                      <div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
                         <span className="font-medium">{symbol.symbol}</span>
-                        <span className="ml-2 text-xs text-gray-500">
+                        <span className="text-xs text-gray-500">
                           {symbol.baseAsset} / USDT
                         </span>
+                        {/* Testnet Badge */}
+                        {symbol.inTestnetAvailable !== undefined && (
+                          <span
+                            className={`inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium ${
+                              symbol.inTestnetAvailable
+                                ? 'bg-emerald-100 text-emerald-700 border border-emerald-200'
+                                : 'bg-orange-100 text-orange-700 border border-orange-200'
+                            }`}
+                            title={symbol.inTestnetAvailable ? 'Im Testnet verfügbar' : 'Nicht im Testnet verfügbar'}
+                          >
+                            {symbol.inTestnetAvailable ? '✓ Testnet' : '✗ Testnet'}
+                          </span>
+                        )}
                       </div>
                       {/* Min Notional Info */}
                       {symbol.minNotional !== undefined && symbol.minNotional > 0 && (

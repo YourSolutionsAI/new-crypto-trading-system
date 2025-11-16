@@ -27,6 +27,7 @@ export interface ExchangeInfoDB {
   permissions: string[];
   permission_sets: any;
   last_updated_at: string;
+  in_testnet_available?: boolean | null;
 }
 
 interface UseExchangeInfoResult {

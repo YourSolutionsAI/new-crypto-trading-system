@@ -1599,14 +1599,14 @@ app.post('/api/exchange-info/sync', async (req, res) => {
     
     console.log(`📊 Syncing ${symbolsToSync.length} symbols:`, symbolsToSync);
     
-    // 2. Hole Exchange-Info von Binance (Testnet)
-    const binanceUrl = 'https://testnet.binance.vision/api/v3/exchangeInfo';
+    // 2. Hole Exchange-Info von Binance Production API (vollständige Daten)
+    const binanceUrl = 'https://api.binance.com/api/v3/exchangeInfo';
     
     let exchangeInfo;
     try {
       const response = await axios.get(binanceUrl, { timeout: 10000 });
       exchangeInfo = response.data;
-      console.log(`✅ Loaded ${exchangeInfo.symbols.length} symbols from Binance`);
+      console.log(`✅ Loaded ${exchangeInfo.symbols.length} symbols from Binance Production API`);
     } catch (binanceError) {
       console.error('❌ Binance API Error:', binanceError.message);
       return res.status(500).json({
@@ -1614,8 +1614,25 @@ app.post('/api/exchange-info/sync', async (req, res) => {
         message: 'Binance API nicht erreichbar',
         error: binanceError.message,
         code: binanceError.code,
-        hint: 'Prüfen Sie Ihre Internetverbindung oder ob Testnet verfügbar ist'
+        hint: 'Prüfen Sie Ihre Internetverbindung'
       });
+    }
+    
+    // 2b. Hole Testnet Exchange-Info NUR für Verfügbarkeitsprüfung
+    let testnetExchangeInfo = null;
+    try {
+      const testnetResponse = await axios.get('https://testnet.binance.vision/api/v3/exchangeInfo', { timeout: 10000 });
+      testnetExchangeInfo = testnetResponse.data;
+      console.log(`✅ Loaded ${testnetExchangeInfo.symbols.length} symbols from Testnet API (für Verfügbarkeitsprüfung)`);
+    } catch (testnetError) {
+      console.warn('⚠️  Testnet API nicht erreichbar, Testnet-Verfügbarkeit wird nicht geprüft:', testnetError.message);
+      // Nicht kritisch, wir machen weiter ohne Testnet-Info
+    }
+    
+    // Erstelle Set für schnelle Testnet-Prüfung
+    const testnetSymbols = new Set();
+    if (testnetExchangeInfo) {
+      testnetExchangeInfo.symbols.forEach(s => testnetSymbols.add(s.symbol));
     }
     
     // 2a. Synchronisiere Rate Limits (global, nicht pro Symbol)
@@ -1684,6 +1701,9 @@ app.post('/api/exchange-info/sync', async (req, res) => {
           continue;
         }
         
+        // Prüfe Testnet-Verfügbarkeit
+        const inTestnetAvailable = testnetSymbols.size > 0 ? testnetSymbols.has(symbol) : null;
+        
         // Extrahiere Filter
         const priceFilter = binanceSymbol.filters.find(f => f.filterType === 'PRICE_FILTER');
         const lotSizeFilter = binanceSymbol.filters.find(f => f.filterType === 'LOT_SIZE');
@@ -1725,6 +1745,7 @@ app.post('/api/exchange-info/sync', async (req, res) => {
           filters: binanceSymbol.filters,
           permissions: binanceSymbol.permissions,
           permission_sets: binanceSymbol.permissionSets || null,
+          in_testnet_available: inTestnetAvailable,
           last_updated_at: new Date().toISOString()
         };
         
@@ -1744,8 +1765,8 @@ app.post('/api/exchange-info/sync', async (req, res) => {
           throw upsertError;
         }
         
-        results.push({ symbol, status: 'synced' });
-        console.log(`✅ Synced ${symbol}`);
+        results.push({ symbol, status: 'synced', inTestnet: inTestnetAvailable });
+        console.log(`✅ Synced ${symbol}${inTestnetAvailable !== null ? ` (Testnet: ${inTestnetAvailable ? '✓' : '✗'})` : ''}`);
         
       } catch (error) {
         console.error(`❌ Error syncing ${symbol}:`, error.message);
@@ -1801,11 +1822,27 @@ app.get('/api/binance/symbols', async (req, res) => {
   try {
     console.log('📡 Fetching symbols directly from Binance API...');
     
-    // Direkt von Binance abfragen (Production API, nicht Testnet)
-    const response = await axios.get('https://api.binance.com/api/v3/exchangeInfo', { timeout: 10000 });
-    const exchangeInfo = response.data;
+    // Hole beide APIs parallel für vollständige Info + Testnet-Verfügbarkeit
+    const [productionResponse, testnetResponse] = await Promise.allSettled([
+      axios.get('https://api.binance.com/api/v3/exchangeInfo', { timeout: 10000 }),
+      axios.get('https://testnet.binance.vision/api/v3/exchangeInfo', { timeout: 10000 })
+    ]);
     
-    console.log(`✅ Received ${exchangeInfo.symbols.length} symbols from Binance`);
+    if (productionResponse.status === 'rejected') {
+      throw new Error('Production API nicht erreichbar');
+    }
+    
+    const exchangeInfo = productionResponse.value.data;
+    console.log(`✅ Received ${exchangeInfo.symbols.length} symbols from Binance Production`);
+    
+    // Erstelle Set für Testnet-Symbole
+    const testnetSymbols = new Set();
+    if (testnetResponse.status === 'fulfilled') {
+      testnetResponse.value.data.symbols.forEach(s => testnetSymbols.add(s.symbol));
+      console.log(`✅ Loaded ${testnetSymbols.size} symbols from Testnet (für Verfügbarkeitsprüfung)`);
+    } else {
+      console.warn('⚠️  Testnet API nicht erreichbar, Testnet-Status wird nicht angezeigt');
+    }
     
     // Filtere nur Spot USDT Trading-Paare
     const symbols = exchangeInfo.symbols
@@ -1836,7 +1873,8 @@ app.get('/api/binance/symbols', async (req, res) => {
           tickSize: parseFloat(tickSize),
           stepSize: parseFloat(stepSize),
           orderTypes: symbol.orderTypes || [],
-          isMarginTradingAllowed: symbol.isMarginTradingAllowed || false
+          isMarginTradingAllowed: symbol.isMarginTradingAllowed || false,
+          inTestnetAvailable: testnetSymbols.size > 0 ? testnetSymbols.has(symbol.symbol) : undefined
         };
       })
       .sort((a, b) => a.symbol.localeCompare(b.symbol));
