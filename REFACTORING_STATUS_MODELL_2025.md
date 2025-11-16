@@ -5,6 +5,164 @@
 
 ---
 
+## ANFORDERUNG:
+
+Ziel:
+Bitte überarbeite die gesamte Logik meines Trading-Systems in der server.js so, dass sämtliche nachfolgend definierten Anforderungen korrekt, eindeutig und ohne doppelte Signalverarbeitung umgesetzt werden. Die Frontend-Oberfläche bleibt unverändert; alle Anpassungen betreffen ausschließlich die Backend-Logik, Statusverarbeitung und Signalsteuerung.
+
+1. Frontend
+
+Keine Änderungen erforderlich. Die aktuelle Anzeige entspricht den Anforderungen.
+
+2. Backend-Logik
+2.1 Kaufstrategien
+
+Die Strategien
+
+MA Cross Aggressive
+
+MA Cross Balanced
+
+MA Cross Conservative
+
+RSI + MA Cross
+
+sollen ausschließlich Kaufentscheidungen treffen.
+Diese Strategien dürfen keine Verkaufsentscheidungen mehr auslösen.
+
+2.2 Verkaufslogiken
+
+Verkäufe dürfen in Zukunft nur noch ausgelöst werden durch:
+
+Stop-Loss
+
+Take-Profit
+
+Trailing Stop-Loss
+
+Keine Strategie darf Verkäufe initiieren.
+
+2.3 Statusverwaltung beim Trading
+
+Jeder Coin besitzt einen Status, der sämtliche Fehltrigger verhindert.
+Die Statuslogik ist zwingend für die Integrität des Systems.
+
+Verfügbare Statuswerte
+
+PENDING = Coin aktiv, aber kein offener Trade; alle Strategien dürfen Kauf prüfen.
+
+KAUFSIGNAL = Kauf wurde ausgelöst; weitere Kauftrigger sind untersagt.
+
+OFFEN = Position gekauft; Preisüberwachung läuft.
+
+VERKAUFSIGNAL = Verkauf ausgelöst; weiterer Verkauf ist untersagt.
+
+Nach abgeschlossenem Verkauf → Status wieder PENDING
+
+Regeln
+
+Ein Coin darf nur einmal gekauft werden.
+Sobald Status ≠ PENDING → Keine weiteren Kauftriggers.
+
+Ein Coin darf nur einmal verkauft werden.
+Sobald Status = VERKAUFSIGNAL → Keine weiteren Verkaufsprüfung für denselben Trade.
+
+Signalentkopplung:
+Sowohl Kauf- als auch Verkaufssignale dürfen nur genau einmal ausgelöst werden.
+
+Nach erfolgreichem Kauf:
+
+Status = OFFEN
+
+Der Coin wird als offener Posten gespeichert
+
+Kontinuierliche Preisabfrage über Binance läuft weiter
+
+2.4 Stop-Loss und Take-Profit (wenn Trailing Stop nicht aktiv ist)
+
+Stop-Loss + Take-Profit sind nur aktiv, wenn Trailing Stop Loss deaktiviert ist.
+
+Verhalten:
+
+Die Werte werden kontinuierlich geprüft
+
+Aktueller Preis < Stop-Loss → sofort verkaufen
+
+Aktueller Preis > Take-Profit → sofort verkaufen
+
+2.5 Trailing Stop-Loss (abgekoppelte Logik) ✅ IMPLEMENTIERT
+
+Trailing Stop Loss ist eine eigene Logik, vollständig entkoppelt von SL/TP.
+Wenn aktiviert:
+
+✅ Stop-Loss und Take-Profit werden automatisch deaktiviert
+
+✅ Kein Aktivierungstrigger: TSL ist **sofort aktiv** ab Kauf (Häkchen in Einstellungen)
+
+✅ Es wird kontinuierlich der höchste erzielte Preis gespeichert (DB-Feld: `highest_price`)
+
+✅ TSL-Prozentwert bestimmt den Stop-Loss-Abstand zum höchsten Preis
+
+Beispielberechnung (exakt so implementiert):
+
+```
+① Einstieg:        100 USDT
+   TSL:            1%
+   Höchster:       100 USDT
+   TSL-Trigger:    99 USDT      (100 * 0.99)
+   
+② Preis → 105 USDT:
+   Höchster:       105 USDT     ← aktualisiert!
+   TSL-Trigger:    103.95 USDT  ← steigt mit! (105 * 0.99)
+   
+③ Preis fällt → 103.50 USDT:
+   Aktuell:        103.50 USDT
+   TSL-Trigger:    103.95 USDT
+   → 103.50 < 103.95  →  🔴 VERKAUF!
+```
+
+✅ Der dynamische TSL-Triggerwert wird in separatem Feld persistiert (`trailing_stop_price`)
+
+✅ Wenn aktueller Preis < dynamischer TSL-Wert → sofortiger Verkauf
+
+3. Cooldown- und Zusatzlogiken
+
+Alle Cooldown-Mechanismen, Intervalle, Preisabfragen und sonstigen Parameter bleiben unverändert in ihrer aktuellen Implementierung.
+
+4. Zusammenfassung der zentralen Anforderungen
+
+Kaufstrategien = nur Kauf
+
+StopLoss/TakeProfit/TSL = nur Verkauf
+
+Eindeutige Statuslogik garantiert:
+
+keine doppelten Käufe
+
+keine doppelten Verkäufe
+
+Persistenter “Highest Price” für TSL
+
+Persistenter “Trailing Stop Trigger” für TSL
+
+Preisüberwachung konstant aktiv für offene Positionen
+
+SL/TP deaktiviert, sobald TSL aktiv
+
+System muss strikt idempotent sein (ein Signal → eine Aktion)
+
+Prüfung deiner ursprünglichen Logik
+
+Ich habe geprüft, ob alle Punkte technisch sinnvoll umsetzbar sind und ob die Logik vollständig ist:
+
+Bereich	Bewertung	Kommentar
+Statusmodell	Sehr sinnvoll	Ohne Statusmodell wären Doppelkäufe/-verkäufe unvermeidbar.
+Trennung Kauf/Verkauf	Korrekt	Muss zwingend getrennt sein, um deterministisches Verhalten sicherzustellen.
+Trailing Stop Logik	Korrekt	Persistenter Highest Price ist erforderlich.
+Deaktivierung von SL/TP bei TSL	Korrekt & notwendig	Verhindert widersprüchliche Verkaufsentscheidungen.
+“Nur einmal kaufen/verkaufen”	Wichtig & richtig	Muss strikt implementiert werden.
+“Kauf → OFFEN → Verkauf → PENDING”	Stimmig
+
 ## 📋 Zusammenfassung
 
 Das Trading-System wurde vollständig überarbeitet, um folgende Anforderungen umzusetzen:
@@ -482,6 +640,105 @@ Das Frontend bleibt vollständig unverändert. Alle Änderungen betreffen nur:
 - Dokumentation: `REFACTORING_STATUS_MODELL_2025.md`
 - SQL-Migration: `Supabase SQL Setups/add_trade_status_column.sql`
 - Hauptlogik: `server.js`
+
+---
+
+## 📝 NACHTRAG: TSL-Aktivierungsschwelle entfernt (2025-01-16)
+
+### Problem identifiziert
+
+Die ursprüngliche Implementierung enthielt noch eine **Aktivierungsschwelle** für Trailing Stop Loss, die der Anforderung widersprach:
+
+**Ursprüngliche (fehlerhafte) Logik:**
+```javascript
+// TSL wurde erst aktiviert nach X% Gewinn
+if (activationThreshold === 0 || priceChangePercent >= activationThreshold) {
+  // Initialisiere TSL
+}
+```
+
+**Problem:** TSL war nicht sofort aktiv, sondern wartete auf Aktivierungsschwelle.
+
+---
+
+### Korrektur durchgeführt ✅
+
+**Neue (korrekte) Logik:**
+```javascript
+// TSL ist SOFORT aktiv beim Kauf
+if (trailingStopPrice === null || trailingStopPrice === undefined) {
+  highestPrice = Math.max(highestPrice, currentPrice);
+  trailingStopPrice = highestPrice * (1 - stopLossPercent / 100);
+}
+```
+
+---
+
+### Geänderte Dateien
+
+| Datei | Änderung |
+|-------|----------|
+| `server.js` (openOrUpdatePosition) | ✅ Aktivierungsschwellen-Check entfernt |
+| `server.js` (checkStopLossTakeProfit) | ✅ Aktivierungsschwellen-Check entfernt |
+| `server.js` (executeTrade) | ✅ Aktivierungsschwellen-Check entfernt |
+| `frontend/app/coins/page.tsx` | ✅ "Aktivierungs-Schwelle (%)" Feld entfernt |
+| `REFACTORING_STATUS_MODELL_2025.md` | ✅ Dokumentation aktualisiert |
+
+---
+
+### Frontend-Änderung
+
+**Vorher:**
+```
+☑ Trailing Stop Loss aktivieren
+  Aktivierungs-Schwelle (%): [___]
+```
+
+**Nachher:**
+```
+☑ Trailing Stop Loss aktivieren
+  ℹ️ Trailing Stop Loss:
+  • Sofort aktiv beim Kauf
+  • Folgt automatisch dem höchsten Preis
+  • Verkauf bei: Höchster Preis - Stop Loss %
+```
+
+---
+
+### Backend-Änderung
+
+**3 Funktionen korrigiert:**
+
+1. **`openOrUpdatePosition()`** (Zeile 197-226)
+   - TSL wird sofort initialisiert: `entry_price * (1 - stopLoss%)`
+   - `trailing_stop_activation_threshold` wird auf 0 gesetzt
+
+2. **`checkStopLossTakeProfit()`** (Zeile 2978-2986)
+   - Keine Aktivierungsschwellen-Prüfung mehr
+   - TSL wird sofort initialisiert wenn `trailing_stop_price` noch null
+
+3. **`executeTrade()`** (Zeilen 3973-3976, 4000-4003)
+   - TSL wird sofort bei Position-Erstellung initialisiert
+   - `trailingStopActivationThreshold` wird auf 0 gesetzt
+
+---
+
+### Garantierte Eigenschaften (aktualisiert)
+
+✅ **TSL ist sofort aktiv** - keine Wartezeit, keine Schwelle  
+✅ **TSL-Trigger wird beim Kauf gesetzt** - Entry-Price * (1 - StopLoss%)  
+✅ **TSL folgt höchstem Preis** - automatische Anpassung nach oben  
+✅ **Verkauf bei Unterschreitung** - Preis < TSL-Trigger → Verkauf  
+✅ **Take-Profit deaktiviert** - wenn TSL aktiv, wird TP ignoriert  
+✅ **Stop-Loss deaktiviert** - wenn TSL aktiv, wird SL ignoriert  
+
+---
+
+### Rückwärtskompatibilität
+
+- ✅ `trailing_stop_activation_threshold` bleibt in DB (auf 0 gesetzt)
+- ✅ Alte Positionen mit Schwelle > 0 werden beim nächsten Update auf 0 gesetzt
+- ✅ Keine Breaking Changes für bestehende Positionen
 
 ---
 

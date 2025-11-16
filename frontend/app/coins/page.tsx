@@ -375,6 +375,8 @@ export default function CoinsPage() {
                                   setEditForm({
                                     ...editForm,
                                     use_trailing_stop: e.target.checked,
+                                    // Aktivierungsschwelle wird immer auf 0 gesetzt (nicht mehr verwendet)
+                                    trailing_stop_activation_threshold: 0
                                   })
                                 }
                                 className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
@@ -387,28 +389,13 @@ export default function CoinsPage() {
                               </label>
                             </div>
                             {editForm.use_trailing_stop && (
-                              <div className="mt-3">
-                                <label className="block text-sm font-medium text-gray-700">
-                                  Aktivierungs-Schwelle (%)
-                                </label>
-                                <input
-                                  type="text"
-                                  value={inputValues.trailing_stop_activation_threshold ?? (editForm.trailing_stop_activation_threshold !== undefined ? formatNumber(editForm.trailing_stop_activation_threshold, 2) : '')}
-                                  onChange={(e) => {
-                                    setInputValues({ ...inputValues, trailing_stop_activation_threshold: e.target.value });
-                                  }}
-                                  onBlur={(e) => {
-                                    const parsed = parseFormattedNumber(e.target.value);
-                                    const value = parsed || 0;
-                                    setEditForm({
-                                      ...editForm,
-                                      trailing_stop_activation_threshold: value,
-                                    });
-                                    setInputValues({ ...inputValues, trailing_stop_activation_threshold: formatNumber(value, 2) });
-                                  }}
-                                  placeholder="0,00"
-                                  className="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm text-left px-3 py-2"
-                                />
+                              <div className="mt-2 p-3 bg-purple-50 rounded border border-purple-200">
+                                <p className="text-xs text-purple-700">
+                                  <strong>ℹ️ Trailing Stop Loss:</strong><br/>
+                                  • Sofort aktiv beim Kauf<br/>
+                                  • Folgt automatisch dem höchsten Preis<br/>
+                                  • Verkauf bei: Höchster Preis - Stop Loss %
+                                </p>
                               </div>
                             )}
                           </div>

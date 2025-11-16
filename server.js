@@ -195,9 +195,9 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
     } else {
       // Neue Position erstellen
       const initialHighestPrice = price;
-      // Trailing Stop Price: Nur setzen wenn keine Aktivierungsschwelle gesetzt ist
-      // Wenn Aktivierungsschwelle > 0, wird der Trailing Stop erst aktiviert, wenn der Preis die Schwelle erreicht
-      const initialTrailingStopPrice = useTrailingStop && stopLossPercent > 0 && activationThreshold === 0
+      // Trailing Stop Price: SOFORT aktiv wenn TSL aktiviert (KEINE Aktivierungsschwelle mehr!)
+      // TSL wird direkt beim Kauf initialisiert: Entry-Price * (1 - StopLoss%)
+      const initialTrailingStopPrice = useTrailingStop && stopLossPercent > 0
         ? initialHighestPrice * (1 - stopLossPercent / 100)
         : null;
       
@@ -217,13 +217,13 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
       
       // Füge Trailing Stop Felder hinzu wenn aktiv
       if (useTrailingStop) {
-        // trailing_stop_price wird nur gesetzt wenn keine Aktivierungsschwelle vorhanden ist
-        // Ansonsten wird es erst in checkStopLossTakeProfit gesetzt, wenn die Schwelle erreicht wird
+        // TSL wird SOFORT initialisiert (keine Aktivierungsschwelle mehr!)
         if (initialTrailingStopPrice !== null) {
           insertData.trailing_stop_price = initialTrailingStopPrice;
         }
         insertData.use_trailing_stop = true;
-        insertData.trailing_stop_activation_threshold = activationThreshold;
+        // Aktivierungsschwelle wird auf 0 gesetzt (nicht mehr verwendet)
+        insertData.trailing_stop_activation_threshold = 0;
       }
       
       const { data: newPosition, error: insertError } = await supabase
@@ -2975,22 +2975,14 @@ async function checkStopLossTakeProfit(currentPrice, symbol) {
       const oldHighestPrice = position.highestPrice ?? position.entryPrice;
       let highestPrice = oldHighestPrice;
       let trailingStopPrice = position.trailingStopPrice;
-      const trailingActivationThreshold = position.trailingStopActivationThreshold ?? activationThreshold;
-
       // SCHRITT 1: Initialisierung (NUR EINMAL wenn trailing_stop_price noch null ist)
-      // Sobald trailing_stop_price gesetzt ist, wird dieser Block nie wieder ausgeführt
+      // TSL ist SOFORT aktiv - KEINE Aktivierungsschwelle mehr!
       if (trailingStopPrice === null || trailingStopPrice === undefined) {
-        // Trailing Stop wurde noch nicht initialisiert → Prüfe Aktivierungsschwelle
-        if (trailingActivationThreshold === 0 || priceChangePercent >= trailingActivationThreshold) {
-          // Aktivierungsschwelle erreicht → Initialisiere trailing_stop_price EINMALIG
-          highestPrice = Math.max(highestPrice, currentPrice);
-          trailingStopPrice = highestPrice * (1 - stopLossPercent / 100);
-          
-          console.log(`📈 Trailing Stop initialisiert für ${symbol}: ${trailingStopPrice.toFixed(8)} USDT (Highest: ${highestPrice.toFixed(8)})`);
-        } else {
-          // Aktivierungsschwelle noch nicht erreicht → Keine weitere Verarbeitung
-          continue;
-        }
+        // Trailing Stop wurde noch nicht initialisiert → Initialisiere SOFORT
+        highestPrice = Math.max(highestPrice, currentPrice);
+        trailingStopPrice = highestPrice * (1 - stopLossPercent / 100);
+        
+        console.log(`📈 Trailing Stop initialisiert für ${symbol}: ${trailingStopPrice.toFixed(8)} USDT (Highest: ${highestPrice.toFixed(8)})`);
       } else {
         // SCHRITT 2: Trailing Stop ist bereits initialisiert → Nur Updates, keine Aktivierungsschwelle-Prüfung mehr
         // Update highest_price und trailing_stop_price wenn Preis gestiegen ist
@@ -3978,9 +3970,9 @@ async function executeTrade(signal, strategy) {
           const newHighestPrice = Math.max(oldHighestPrice, newAvgPrice);
           
           // Berechne neuen Trailing Stop Preis (wenn Trailing aktiv)
-          // WICHTIG: Nur setzen wenn keine Aktivierungsschwelle vorhanden ist
+          // TSL wird SOFORT initialisiert (keine Aktivierungsschwelle mehr!)
           let newTrailingStopPrice = existingPos.trailingStopPrice;
-          if (useTrailingStop && stopLossPercent > 0 && activationThreshold === 0) {
+          if (useTrailingStop && stopLossPercent > 0) {
             newTrailingStopPrice = newHighestPrice * (1 - stopLossPercent / 100);
           }
           
@@ -3998,15 +3990,15 @@ async function executeTrade(signal, strategy) {
             updatedPosition.highestPrice = newHighestPrice;
             updatedPosition.trailingStopPrice = newTrailingStopPrice;
             updatedPosition.useTrailingStop = true;
-            updatedPosition.trailingStopActivationThreshold = activationThreshold;
+            updatedPosition.trailingStopActivationThreshold = 0; // Nicht mehr verwendet
           }
           
           openPositions.set(positionKey, updatedPosition);
         } else {
           // Neue Position
           const initialHighestPrice = avgPrice;
-          // WICHTIG: Trailing Stop nur setzen wenn keine Aktivierungsschwelle gesetzt ist
-          const initialTrailingStopPrice = useTrailingStop && stopLossPercent > 0 && activationThreshold === 0
+          // TSL wird SOFORT initialisiert (keine Aktivierungsschwelle mehr!)
+          const initialTrailingStopPrice = useTrailingStop && stopLossPercent > 0
             ? initialHighestPrice * (1 - stopLossPercent / 100)
             : null;
           
@@ -4024,7 +4016,7 @@ async function executeTrade(signal, strategy) {
             newPosition.highestPrice = initialHighestPrice;
             newPosition.trailingStopPrice = initialTrailingStopPrice;
             newPosition.useTrailingStop = true;
-            newPosition.trailingStopActivationThreshold = activationThreshold;
+            newPosition.trailingStopActivationThreshold = 0; // Nicht mehr verwendet
           }
           
           openPositions.set(positionKey, newPosition);
