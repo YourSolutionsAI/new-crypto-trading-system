@@ -128,14 +128,15 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
     const stopLossPercent = mergedConfig?.risk?.stop_loss_percent ?? 0;
     const activationThreshold = mergedConfig?.risk?.trailing_stop_activation_threshold ?? 0;
     
-    // Prüfe ob bereits eine offene Position existiert
+    // Prüfe ob bereits eine offene Position existiert (berücksichtige auch 'partial' für Rückwärtskompatibilität)
     const { data: existingPosition, error: fetchError } = await supabase
       .from('positions')
       .select('*')
       .eq('strategy_id', strategyId)
       .eq('symbol', symbol)
-      .eq('status', 'open')
-      .single();
+      .in('status', ['open', 'partial'])
+      .gt('quantity', 0)
+      .maybeSingle();
     
     if (fetchError && fetchError.code !== 'PGRST116') { // PGRST116 = no rows returned
       throw fetchError;
@@ -240,12 +241,94 @@ async function openOrUpdatePosition(strategyId, symbol, quantity, price) {
 }
 
 /**
- * Reduziert oder schließt eine Position in der Datenbank
+ * Schließt eine Position in der Datenbank (immer vollständig)
+ * WICHTIG: Es gibt nur volle Verkäufe - quantity sollte immer der gesamten Position entsprechen
  * @param {string} strategyId - Strategy ID
  * @param {string} symbol - Trading Symbol (z.B. BTCUSDT)
- * @param {number} quantity - Verkaufte Menge
+ * @param {number} quantity - Verkaufte Menge (sollte immer = gesamte Position sein)
  * @returns {Object} Ergebnis mit entry_price für PnL-Berechnung
  */
+/**
+ * Validiert und bereinigt eine Position nach einem Verkauf
+ * Stellt sicher, dass geschlossene Positionen auch wirklich aus der DB entfernt werden
+ */
+async function validateAndCleanupPosition(strategyId, symbol) {
+  try {
+    const positionKey = `${strategyId}_${symbol}`;
+    
+    // Prüfe Position in der Datenbank (sowohl open als auch partial)
+    const { data: position, error } = await supabase
+      .from('positions')
+      .select('*')
+      .eq('strategy_id', strategyId)
+      .eq('symbol', symbol)
+      .in('status', ['open', 'partial'])
+      .maybeSingle();
+    
+    if (error) {
+      console.error(`❌ Fehler beim Validieren der Position ${symbol}: ${error.message}`);
+      return false;
+    }
+    
+    // Wenn keine Position gefunden oder quantity <= 0, bereinige In-Memory Map
+    if (!position || parseFloat(position.quantity) <= 0.00000001) {
+      // Stelle sicher, dass Position wirklich geschlossen ist
+      if (position && position.status !== 'closed') {
+        console.log(`🔧 Bereinige Position in DB: ${symbol} (quantity: ${position.quantity})`);
+        await supabase
+          .from('positions')
+          .update({
+            quantity: 0,
+            status: 'closed',
+            closed_at: new Date().toISOString(),
+            updated_at: new Date().toISOString()
+          })
+          .eq('id', position.id);
+      }
+      
+      // Entferne aus In-Memory Map
+      if (openPositions.has(positionKey)) {
+        openPositions.delete(positionKey);
+        console.log(`✅ Position aus In-Memory Map entfernt: ${symbol}`);
+      }
+      return true;
+    }
+    
+    // Position existiert noch mit quantity > 0 - synchronisiere In-Memory Map
+    const dbQuantity = parseFloat(position.quantity);
+    if (openPositions.has(positionKey)) {
+      const memPos = openPositions.get(positionKey);
+      memPos.quantity = dbQuantity;
+      // Stelle sicher, dass Status in DB 'open' ist (nicht 'partial')
+      if (position.status === 'partial') {
+        await supabase
+          .from('positions')
+          .update({ status: 'open' })
+          .eq('id', position.id);
+      }
+    } else {
+      // Position existiert in DB aber nicht in Memory - füge hinzu
+      openPositions.set(positionKey, {
+        symbol: symbol,
+        entryPrice: parseFloat(position.entry_price),
+        quantity: dbQuantity,
+        orderId: position.id,
+        timestamp: new Date(position.opened_at),
+        strategyId: strategyId,
+        highestPrice: position.highest_price ? parseFloat(position.highest_price) : parseFloat(position.entry_price),
+        trailingStopPrice: position.trailing_stop_price ? parseFloat(position.trailing_stop_price) : null,
+        useTrailingStop: position.use_trailing_stop === true,
+        trailingStopActivationThreshold: position.trailing_stop_activation_threshold ? parseFloat(position.trailing_stop_activation_threshold) : 0
+      });
+    }
+    
+    return true;
+  } catch (error) {
+    console.error(`❌ Fehler bei Position-Validierung: ${error.message}`);
+    return false;
+  }
+}
+
 async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 0) {
   try {
     // Verhindere Endlosschleifen bei Retries
@@ -261,18 +344,25 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 
     }
     
     // SCHICHT 3: Atomic Position-Update
-    // Hole aktuelle Position mit Lock (FOR UPDATE würde hier helfen, aber Supabase unterstützt das nicht direkt)
-    // Stattdessen verwenden wir einen Optimistic Lock mit WHERE-Clause
+    // Hole aktuelle Position - berücksichtige sowohl 'open' als auch 'partial' Status
+    // (partial sollte eigentlich nicht mehr vorkommen, aber für Sicherheit)
     const { data: position, error: fetchError } = await supabase
       .from('positions')
       .select('*')
       .eq('strategy_id', strategyId)
       .eq('symbol', symbol)
-      .eq('status', 'open')
+      .in('status', ['open', 'partial'])
+      .gt('quantity', 0)
       .single();
     
     if (fetchError || !position) {
       console.warn(`⚠️  Keine offene Position gefunden für ${symbol}`);
+      // Bereinige In-Memory Map falls vorhanden
+      const positionKey = `${strategyId}_${symbol}`;
+      if (openPositions.has(positionKey)) {
+        openPositions.delete(positionKey);
+        console.log(`🗑️  Position aus In-Memory Map entfernt (nicht in DB gefunden): ${symbol}`);
+      }
       return {
         action: 'no_position',
         entry_price: 0,
@@ -302,13 +392,20 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 
       updated_at: new Date().toISOString()
     };
     
+    // WICHTIG: Bei vollem Verkauf sollte remainingQuantity immer 0 sein
+    // Da es NUR volle Verkäufe gibt, sollte dieser Fall nie eintreten
     if (remainingQuantity <= 0.00000001) {
-      // Position komplett schließen
+      // Position komplett schließen (normaler Fall bei vollem Verkauf)
       updateData.status = 'closed';
       updateData.closed_at = new Date().toISOString();
       updateData.quantity = 0;
     } else {
-      updateData.status = 'partial';
+      // Dies sollte eigentlich nie passieren, da es nur volle Verkäufe gibt
+      // Aber für Sicherheit behalten wir es als Fallback
+      console.warn(`⚠️  UNERWARTET: Teilverkauf erkannt für ${symbol} (${remainingQuantity} verbleibend) - sollte nicht passieren!`);
+      console.warn(`   Verkauft: ${requestedQuantity}, Vorher: ${currentQuantity}, Verbleibend: ${remainingQuantity}`);
+      // Position bleibt offen (nicht 'partial', da wir das nicht mehr verwenden)
+      updateData.status = 'open';
     }
     
     // WICHTIG: Atomic Update mit WHERE-Clause für Quantity-Check
@@ -331,23 +428,16 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 
       if (remainingQuantity <= 0.00000001) {
         console.log(`🔄 Erzwinge Position-Schließung für ${symbol} (Bypass Quantity-Check wegen Race Condition)`);
         
-        const { data: forceCloseResult, error: forceCloseError } = await supabase
-          .from('positions')
-          .update({
-            quantity: 0,
-            status: 'closed',
-            closed_at: new Date().toISOString(),
-            updated_at: new Date().toISOString()
-          })
-          .eq('id', position.id)
-          .eq('status', 'open') // Nur updaten wenn noch offen
-          .select()
-          .single();
+        // Versuche mit verschiedenen WHERE-Bedingungen
+        const forceCloseAttempts = [
+          { eq: 'status', value: 'open' },
+          { eq: 'status', value: 'partial' },
+          { eq: null, value: null } // Ohne Status-Check als letzter Versuch
+        ];
         
-        if (forceCloseError) {
-          console.error(`❌ Fehler beim erzwungenen Schließen von ${symbol}: ${forceCloseError.message}`);
-          // Letzter Versuch: Update ohne Status-Check
-          const { error: finalError } = await supabase
+        let forceCloseSuccess = false;
+        for (const attempt of forceCloseAttempts) {
+          const updateQuery = supabase
             .from('positions')
             .update({
               quantity: 0,
@@ -357,10 +447,21 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 
             })
             .eq('id', position.id);
           
-          if (finalError) {
-            console.error(`❌ Finaler Versuch fehlgeschlagen: ${finalError.message}`);
-            throw finalError;
+          if (attempt.eq) {
+            updateQuery.eq(attempt.eq, attempt.value);
           }
+          
+          const { error: forceCloseError } = await updateQuery.select().single();
+          
+          if (!forceCloseError) {
+            forceCloseSuccess = true;
+            break;
+          }
+        }
+        
+        if (!forceCloseSuccess) {
+          console.error(`❌ Alle Versuche zum erzwungenen Schließen fehlgeschlagen für ${symbol}`);
+          throw new Error('Position konnte nicht geschlossen werden');
         }
         
         console.log(`✅ Position ${symbol} erfolgreich geschlossen (erzwungen)`);
@@ -370,6 +471,9 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 
         if (openPositions.has(positionKey)) {
           openPositions.delete(positionKey);
         }
+        
+        // Validiere nochmal um sicherzustellen
+        await validateAndCleanupPosition(strategyId, symbol);
         
         return {
           action: 'closed',
@@ -385,7 +489,8 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 
         .select('*')
         .eq('strategy_id', strategyId)
         .eq('symbol', symbol)
-        .eq('status', 'open')
+        .in('status', ['open', 'partial'])
+        .gt('quantity', 0)
         .single();
       
       if (retryPosition.data) {
@@ -403,6 +508,10 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 
         }
       } else {
         // Position existiert nicht mehr
+        const positionKey = `${strategyId}_${symbol}`;
+        if (openPositions.has(positionKey)) {
+          openPositions.delete(positionKey);
+        }
         return {
           action: 'no_position',
           entry_price: entryPrice,
@@ -411,7 +520,7 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 
       }
     }
     
-    // Update erfolgreich
+    // Update erfolgreich - VALIDIERUNG durchführen
     const positionKey = `${strategyId}_${symbol}`;
     
     if (remainingQuantity <= 0.00000001) {
@@ -420,6 +529,9 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 
       if (openPositions.has(positionKey)) {
         openPositions.delete(positionKey);
       }
+      
+      // KRITISCH: Validiere dass Position wirklich geschlossen ist
+      await validateAndCleanupPosition(strategyId, symbol);
       
       return {
         action: 'closed',
@@ -432,7 +544,20 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 
       if (openPositions.has(positionKey)) {
         const memPosition = openPositions.get(positionKey);
         memPosition.quantity = remainingQuantity;
+      } else {
+        // Position sollte in Memory sein - füge hinzu falls fehlt
+        openPositions.set(positionKey, {
+          symbol: symbol,
+          entryPrice: entryPrice,
+          quantity: remainingQuantity,
+          orderId: updatedPosition.id,
+          timestamp: new Date(updatedPosition.opened_at),
+          strategyId: strategyId
+        });
       }
+      
+      // Validiere dass alles synchron ist
+      await validateAndCleanupPosition(strategyId, symbol);
       
       return {
         action: 'reduced',
@@ -442,6 +567,12 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, retryCount = 
     }
   } catch (error) {
     console.error('❌ Fehler beim Reduzieren/Schließen der Position:', error);
+    // Bei Fehler: Versuche Position zu bereinigen
+    try {
+      await validateAndCleanupPosition(strategyId, symbol);
+    } catch (cleanupError) {
+      console.error('❌ Fehler bei Bereinigung nach Fehler:', cleanupError);
+    }
     throw error;
   }
 }
@@ -454,16 +585,29 @@ async function loadOpenPositionsFromDB() {
   try {
     console.log('📊 Lade offene Positionen aus der Datenbank...');
     
+    // Lade sowohl 'open' als auch 'partial' Positionen (partial sollte eigentlich nicht mehr vorkommen)
     const { data: positions, error } = await supabase
       .from('positions')
       .select('*')
-      .eq('status', 'open')
+      .in('status', ['open', 'partial'])
       .gt('quantity', 0);
     
     if (error) throw error;
     
     // Clear und neu befüllen der In-Memory Map
     openPositions.clear();
+    
+    // Bereinige alte 'partial' Status Positionen und konvertiere sie zu 'open'
+    const positionsToFix = (positions || []).filter(p => p.status === 'partial');
+    if (positionsToFix.length > 0) {
+      console.log(`🔧 Konvertiere ${positionsToFix.length} 'partial' Position(en) zu 'open'...`);
+      for (const position of positionsToFix) {
+        await supabase
+          .from('positions')
+          .update({ status: 'open' })
+          .eq('id', position.id);
+      }
+    }
     
     for (const position of (positions || [])) {
       const positionKey = `${position.strategy_id}_${position.symbol}`;
@@ -563,14 +707,15 @@ async function syncPositionWithBinance(strategyId, symbol) {
     
     console.log(`📊 Binance Guthaben für ${baseAsset}: ${actualBalance} (Free: ${balance ? parseFloat(balance.free) : 0}, Locked: ${balance ? parseFloat(balance.locked) : 0})`);
     
-    // Hole Position aus Datenbank
+    // Hole Position aus Datenbank (berücksichtige auch 'partial' für Rückwärtskompatibilität)
     const { data: position, error: posError } = await supabase
       .from('positions')
       .select('*')
       .eq('strategy_id', strategyId)
       .eq('symbol', symbol)
-      .eq('status', 'open')
-      .single();
+      .in('status', ['open', 'partial'])
+      .gt('quantity', 0)
+      .maybeSingle();
     
     if (posError || !position) {
       // Keine Position in DB gefunden - alles OK
@@ -751,7 +896,7 @@ async function syncAllPositionsWithBinance() {
     const { data: positions, error } = await supabase
       .from('positions')
       .select('strategy_id, symbol')
-      .eq('status', 'open')
+      .in('status', ['open', 'partial'])
       .gt('quantity', 0);
     
     if (error) {
@@ -1402,7 +1547,7 @@ app.get('/api/positions', async (req, res) => {
           config
         )
       `)
-      .eq('status', 'open')
+      .in('status', ['open', 'partial'])
       .gt('quantity', 0);
     
     if (error) {
@@ -3184,14 +3329,15 @@ async function canTrade(signal, strategy) {
       .select('*')
       .eq('strategy_id', strategy.id)
       .eq('symbol', symbol)
-      .eq('status', 'open')
-      .single();
+      .in('status', ['open', 'partial'])
+      .gt('quantity', 0)
+      .maybeSingle();
     
-    if (posError && posError.code !== 'PGRST116') { // PGRST116 = no rows returned
+    if (posError) {
       console.error(`❌ Fehler beim Prüfen der Position: ${posError.message}`);
     }
     
-    if (existingPosition && existingPosition.quantity > 0) {
+    if (existingPosition && parseFloat(existingPosition.quantity) > 0) {
       // STATE-OF-THE-ART: Prüfe auch bei Binance ob Position wirklich noch existiert
       const syncResult = await syncPositionWithBinance(strategy.id, symbol);
       
@@ -3248,10 +3394,11 @@ async function canTrade(signal, strategy) {
       .select('*')
       .eq('strategy_id', strategy.id)
       .eq('symbol', symbol)
-      .eq('status', 'open')
-      .single();
+      .in('status', ['open', 'partial'])
+      .gt('quantity', 0)
+      .maybeSingle();
     
-    if (posError || !position || position.quantity <= 0) {
+    if (posError || !position || parseFloat(position.quantity) <= 0) {
       const reason = `Keine offene Position zum Verkaufen: ${symbol}`;
       console.log(`⚠️  KEINE OFFENE POSITION ZUM VERKAUFEN: ${symbol}`);
       console.log(`   Strategie: ${strategy.name} (ID: ${strategy.id})`);
@@ -3339,7 +3486,65 @@ async function executeTrade(signal, strategy) {
     console.log('═══════════════════════════════════════════════');
 
     const side = signal.action === 'buy' ? 'BUY' : 'SELL';
-    const quantity = calculateQuantity(signal.price, symbol, strategy);
+    let quantity;
+    
+    if (side === 'BUY') {
+      // Bei Kauf: Berechne Menge basierend auf max_trade_size_usdt
+      quantity = calculateQuantity(signal.price, symbol, strategy);
+      if (!quantity || quantity <= 0) {
+        console.error(`❌ FEHLER: Konnte Menge für Kauf nicht berechnen`);
+        resolveTrade();
+        tradeQueues.delete(symbol);
+        return null;
+      }
+    } else {
+      // Bei Verkauf: IMMER die gesamte Position verkaufen (ignoriere max_trade_size)
+      const positionKey = `${strategy.id}_${symbol}`;
+      const position = openPositions.get(positionKey);
+      
+      if (!position || position.quantity <= 0) {
+        // Fallback: Prüfe in Datenbank
+        const { data: dbPosition, error: posError } = await supabase
+          .from('positions')
+          .select('quantity')
+          .eq('strategy_id', strategy.id)
+          .eq('symbol', symbol)
+          .in('status', ['open', 'partial'])
+          .gt('quantity', 0)
+          .maybeSingle();
+        
+        if (posError || !dbPosition) {
+          console.error(`❌ Keine Position gefunden für Verkauf: ${symbol}`);
+          await logBotEvent('error', `SELL ohne Position`, {
+            symbol: symbol,
+            strategy_id: strategy.id,
+            error: posError?.message || 'Position nicht gefunden'
+          });
+          resolveTrade();
+          tradeQueues.delete(symbol);
+          return null;
+        }
+        
+        quantity = parseFloat(dbPosition.quantity);
+      } else {
+        quantity = position.quantity;
+      }
+      
+      // Stelle sicher, dass Menge korrekt gerundet ist (Lot Size)
+      const lotSize = lotSizes[symbol];
+      if (lotSize) {
+        quantity = Math.floor(quantity / lotSize.stepSize) * lotSize.stepSize;
+        quantity = parseFloat(quantity.toFixed(lotSize.decimals));
+        
+        // Prüfe Minimum
+        if (quantity < lotSize.minQty) {
+          console.warn(`⚠️  Position-Menge ${quantity} < Minimum ${lotSize.minQty} - verwende Minimum`);
+          quantity = lotSize.minQty;
+        }
+      }
+      
+      console.log(`📊 Verkaufe GESAMTE Position: ${quantity} ${symbol}`);
+    }
 
     console.log(`📊 Symbol: ${symbol}`);
     console.log(`📈 Seite: ${side}`);
@@ -3558,6 +3763,15 @@ async function executeTrade(signal, strategy) {
               memPos.quantity = result.remaining_quantity;
             }
           }
+          
+          // KRITISCH: Validiere Position nach Verkauf um sicherzustellen, dass alles synchron ist
+          // Dies stellt sicher, dass geschlossene Positionen auch wirklich aus der DB entfernt werden
+          await validateAndCleanupPosition(strategy.id, symbol);
+        }
+        
+        // Auch bei 'no_position': Validiere und bereinige trotzdem
+        if (result.action === 'no_position') {
+          await validateAndCleanupPosition(strategy.id, symbol);
         }
       } catch (error) {
         console.error(`❌ Fehler beim Reduzieren/Schließen der Position: ${error.message}`);
@@ -3567,6 +3781,13 @@ async function executeTrade(signal, strategy) {
           symbol: symbol,
           strategy_id: strategy.id
         });
+        
+        // Bei Fehler: Versuche trotzdem zu validieren und zu bereinigen
+        try {
+          await validateAndCleanupPosition(strategy.id, symbol);
+        } catch (validationError) {
+          console.error(`❌ Fehler bei Validierung nach Fehler: ${validationError.message}`);
+        }
       }
     }
 
@@ -3642,8 +3863,9 @@ async function executeTrade(signal, strategy) {
         .select('*')
         .eq('strategy_id', strategy.id)
         .eq('symbol', symbol)
-        .eq('status', 'open')
-        .single();
+        .in('status', ['open', 'partial'])
+        .gt('quantity', 0)
+        .maybeSingle();
       
       if (checkPosition && parseFloat(checkPosition.quantity) > 0) {
         const positionKey = `${strategy.id}_${symbol}`;
