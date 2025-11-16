@@ -502,7 +502,7 @@ async function reduceOrClosePosition(strategyId, symbol, quantity, closeReason =
         const retryCurrentQty = parseFloat(retryPosition.data.quantity);
         if (retryCurrentQty >= requestedQuantity) {
           // Versuche nochmal mit aktualisierten Werten (mit Retry-Counter)
-          return await reduceOrClosePosition(strategyId, symbol, quantity, retryCount + 1);
+          return await reduceOrClosePosition(strategyId, symbol, quantity, closeReason, retryCount + 1);
         } else {
           // Nicht genug Position mehr vorhanden
           return {
