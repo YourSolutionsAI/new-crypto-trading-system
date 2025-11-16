@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 
 interface InfoTooltipProps {
@@ -8,32 +8,32 @@ interface InfoTooltipProps {
   maxWidth?: string;
 }
 
-/**
- * InfoTooltip - Zeigt ein "i" Icon mit Hover-Popup
- * Verwendet React Portal um Clipping-Probleme zu verhindern
- */
-export default function InfoTooltip({ 
-  content, 
-  maxWidth = '450px' 
-}: InfoTooltipProps) {
-  const [isVisible, setIsVisible] = useState(false);
-  const [coords, setCoords] = useState({ top: 0, left: 0 });
-  const [isClient, setIsClient] = useState(false);
-  
-  const iconRef = useRef<HTMLDivElement>(null);
+// ============================================================================
+// Tooltip Portal Komponente
+// ============================================================================
+// Diese Komponente rendert den Tooltip-Inhalt über ein Portal direkt im <body>.
+// So wird verhindert, dass der Tooltip von übergeordneten Containern
+// mit `overflow: hidden` abgeschnitten wird.
+// ============================================================================
+const TooltipPortal = ({
+  content,
+  targetRect,
+  maxWidth,
+  onMouseEnter,
+  onMouseLeave,
+}: {
+  content: string;
+  targetRect: DOMRect | null;
+  maxWidth: string;
+  onMouseEnter: () => void;
+  onMouseLeave: () => void;
+}) => {
   const tooltipRef = useRef<HTMLDivElement>(null);
+  const [coords, setCoords] = useState({ top: 0, left: 0, opacity: 0 });
 
-  // Sicherstellen, dass wir auf dem Client sind (für SSR/Next.js)
   useEffect(() => {
-    setIsClient(true);
-  }, []);
-
-  // Positionierungslogik
-  useEffect(() => {
-    if (isVisible && iconRef.current && tooltipRef.current) {
-      const iconRect = iconRef.current.getBoundingClientRect();
+    if (targetRect && tooltipRef.current) {
       const tooltipEl = tooltipRef.current;
-      
       const tooltipHeight = tooltipEl.offsetHeight;
       const tooltipWidth = tooltipEl.offsetWidth;
 
@@ -43,31 +43,26 @@ export default function InfoTooltip({
       const margin = 20;
 
       let top, left;
-      let position = '';
 
-      // 1. Bevorzuge bottom
-      if (iconRect.bottom + tooltipHeight + spacing < viewportHeight - margin) {
-        position = 'bottom';
-        top = iconRect.bottom + spacing + window.scrollY;
-        left = iconRect.left + (iconRect.width / 2) - (tooltipWidth / 2) + window.scrollX;
+      // 1. Bevorzuge 'bottom'
+      if (targetRect.bottom + tooltipHeight + spacing < viewportHeight - margin) {
+        top = targetRect.bottom + spacing + window.scrollY;
+        left = targetRect.left + (targetRect.width / 2) - (tooltipWidth / 2) + window.scrollX;
       }
-      // 2. Fallback: top
-      else if (iconRect.top - tooltipHeight - spacing > margin) {
-        position = 'top';
-        top = iconRect.top - tooltipHeight - spacing + window.scrollY;
-        left = iconRect.left + (iconRect.width / 2) - (tooltipWidth / 2) + window.scrollX;
+      // 2. Fallback: 'top'
+      else if (targetRect.top - tooltipHeight - spacing > margin) {
+        top = targetRect.top - tooltipHeight - spacing + window.scrollY;
+        left = targetRect.left + (targetRect.width / 2) - (tooltipWidth / 2) + window.scrollX;
       }
-      // 3. Fallback: right
-      else if (iconRect.right + tooltipWidth + spacing < viewportWidth - margin) {
-        position = 'right';
-        top = iconRect.top + (iconRect.height / 2) - (tooltipHeight / 2) + window.scrollY;
-        left = iconRect.right + spacing + window.scrollX;
+      // 3. Fallback: 'right'
+      else if (targetRect.right + tooltipWidth + spacing < viewportWidth - margin) {
+        top = targetRect.top + (targetRect.height / 2) - (tooltipHeight / 2) + window.scrollY;
+        left = targetRect.right + spacing + window.scrollX;
       }
-      // 4. Letzter Fallback: left
+      // 4. Letzter Fallback: 'left'
       else {
-        position = 'left';
-        top = iconRect.top + (iconRect.height / 2) - (tooltipHeight / 2) + window.scrollY;
-        left = iconRect.left - tooltipWidth - spacing + window.scrollX;
+        top = targetRect.top + (targetRect.height / 2) - (tooltipHeight / 2) + window.scrollY;
+        left = targetRect.left - tooltipWidth - spacing + window.scrollX;
       }
 
       // Horizontale Position an Viewport anpassen
@@ -77,48 +72,72 @@ export default function InfoTooltip({
       if (left + tooltipWidth > viewportWidth - margin + window.scrollX) {
         left = viewportWidth - tooltipWidth - margin + window.scrollX;
       }
-      
-      // Vertikale Position an Viewport anpassen
-      if (top < margin + window.scrollY) {
-        top = margin + window.scrollY;
-      }
-      
-      setCoords({ top, left });
-      
-      // Arrow-Position anpassen
-      if (tooltipEl) {
-        tooltipEl.dataset.position = position;
-      }
-    }
-  }, [isVisible]);
 
-  const TooltipComponent = (
+      setCoords({ top, left, opacity: 1 });
+    }
+  }, [targetRect, maxWidth]);
+
+  if (!targetRect) return null;
+
+  return createPortal(
     <div
       ref={tooltipRef}
       className="fixed z-[9999] px-5 py-4 text-sm leading-relaxed text-white bg-gray-900 rounded-lg shadow-2xl transition-opacity duration-200"
       style={{
         ...coords,
         width: maxWidth,
-        maxWidth: `calc(100vw - ${2 * 20}px)`,
-        opacity: isVisible ? 1 : 0,
-        pointerEvents: isVisible ? 'auto' : 'none',
+        maxWidth: `calc(100vw - ${2 * 20}px)`, // Verwende 20px direkt
       }}
+      onMouseEnter={onMouseEnter}
+      onMouseLeave={onMouseLeave}
     >
-      <div className="relative z-10 whitespace-pre-line">
-        {content}
-      </div>
-    </div>
+      <div className="relative z-10 whitespace-pre-line">{content}</div>
+    </div>,
+    document.body
   );
+};
 
+
+// ============================================================================
+// Hauptkomponente: InfoTooltip
+// ============================================================================
+// Diese Komponente rendert das "i"-Icon und steuert die Sichtbarkeit
+// des TooltipPortals. Ein Timeout verhindert das Flackern beim
+// Bewegen der Maus vom Icon zum Tooltip.
+// ============================================================================
+export default function InfoTooltip({ 
+  content, 
+  maxWidth = '450px' 
+}: InfoTooltipProps) {
+  const [isVisible, setIsVisible] = useState(false);
+  const [targetRect, setTargetRect] = useState<DOMRect | null>(null);
+  const [isClient, setIsClient] = useState(false);
+  const iconRef = useRef<HTMLDivElement>(null);
+  const hideTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
+
+  useEffect(() => {
+    setIsClient(true);
+  }, []);
+
+  const showTooltip = useCallback(() => {
+    if (iconRef.current) {
+      clearTimeout(hideTimeoutRef.current);
+      setTargetRect(iconRef.current.getBoundingClientRect());
+      setIsVisible(true);
+    }
+  }, []);
+
+  const hideTooltip = useCallback(() => {
+    hideTimeoutRef.current = setTimeout(() => {
+      setIsVisible(false);
+    }, 200); // Kurze Verzögerung, um den Übergang zum Tooltip zu ermöglichen
+  }, []);
+  
   return (
-    <div className="inline-block" ref={iconRef}>
+    <div className="inline-block" ref={iconRef} onMouseEnter={showTooltip} onMouseLeave={hideTooltip}>
       {/* Info Icon */}
       <div
         className="inline-flex items-center justify-center w-4 h-4 ml-1 text-xs text-gray-400 border border-gray-300 rounded-full cursor-help hover:text-blue-500 hover:border-blue-500 transition-colors"
-        onMouseEnter={() => setIsVisible(true)}
-        onMouseLeave={() => setIsVisible(false)}
-        onFocus={() => setIsVisible(true)}
-        onBlur={() => setIsVisible(false)}
         tabIndex={0}
         role="tooltip"
         aria-label="Information"
@@ -126,7 +145,15 @@ export default function InfoTooltip({
         i
       </div>
 
-      {isClient && createPortal(TooltipComponent, document.body)}
+      {isClient && isVisible && (
+        <TooltipPortal
+          content={content}
+          targetRect={targetRect}
+          maxWidth={maxWidth}
+          onMouseEnter={showTooltip} // Hält den Tooltip offen, wenn die Maus darauf ist
+          onMouseLeave={hideTooltip}
+        />
+      )}
     </div>
   );
 }
