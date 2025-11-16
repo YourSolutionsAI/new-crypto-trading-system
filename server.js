@@ -1788,6 +1788,16 @@ app.get('/api/positions', async (req, res) => {
       const cooldownRemainingSeconds = Math.round(cooldownRemainingMs / 1000);
       const cooldownRemainingMinutes = Math.round(cooldownRemainingMs / 60000);
       
+      // DEBUG: Zeige was ins Response-Objekt kommt
+      if (position.symbol === 'BTCUSDT') {
+        console.log(`📤 Response für ${position.symbol}:`, {
+          stopLossPrice,
+          takeProfitPrice,
+          trailingStopPrice,
+          useTrailingStop
+        });
+      }
+      
       allPositions.push({
         id: position.id,
         symbol: position.symbol,
