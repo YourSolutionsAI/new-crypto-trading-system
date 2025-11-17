@@ -447,6 +447,9 @@ export default function TradesPage() {
                         Gesamt
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Gebühr
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                         PnL
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
@@ -515,6 +518,15 @@ export default function TradesPage() {
                             {((trade as any).total && (trade as any).total !== null) 
                               ? ((trade as any).total ?? 0).toFixed(2) 
                               : ((trade.price || 0) * (trade.quantity || 0)).toFixed(2)} USDT
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                            {trade.commission !== undefined && trade.commission !== null && trade.commission > 0 ? (
+                              <span className="text-gray-600">
+                                {trade.commission.toFixed(8)} {trade.commission_asset || 'USDT'}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">-</span>
+                            )}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm">
                             {trade.pnl !== undefined && trade.pnl !== null ? (

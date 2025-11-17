@@ -19,6 +19,8 @@ export interface Trade {
   created_at: string;
   order_id?: string;
   exit_reason?: 'trailing_stop' | 'stop_loss' | 'take_profit' | 'ma_cross' | 'manual' | 'other'; // NEU: Exit-Grund
+  commission?: number; // Handelsgebühr
+  commission_asset?: string; // Asset der Gebühr (z.B. USDT, BNB)
   metadata?: any;
 }
 

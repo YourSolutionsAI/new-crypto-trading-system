@@ -2786,12 +2786,18 @@ app.post('/api/sell', async (req, res) => {
     const executedQty = parseFloat(order.executedQty);
     const total = avgPrice * executedQty;
 
+    // Gebühren aus fills extrahieren
+    const { commission, commissionAsset } = extractCommissionFromFills(order.fills);
+
     console.log(`✅ Verkauf erfolgreich!`);
     console.log(`   Order ID: ${order.orderId}`);
     console.log(`   Status: ${order.status}`);
     console.log(`   Ausgeführte Menge: ${executedQty}`);
     console.log(`   Durchschnittspreis: ${avgPrice.toFixed(8)} USDT`);
     console.log(`   Gesamtwert: ${total.toFixed(2)} USDT`);
+    if (commission !== null && commission > 0) {
+      console.log(`   💰 Gebühr: ${commission.toFixed(8)} ${commissionAsset || 'USDT'}`);
+    }
     console.log('═══════════════════════════════════════════════');
     console.log('');
 
@@ -2810,6 +2816,8 @@ app.post('/api/sell', async (req, res) => {
         executed_at: new Date().toISOString(),
         pnl: null, // Kein PnL für manuelle Trades ohne Entry-Preis
         exit_reason: 'manual', // NEU: Manueller Verkauf
+        commission: commission,
+        commission_asset: commissionAsset,
         metadata: {
           manual: true,
           asset: asset,
@@ -2819,6 +2827,14 @@ app.post('/api/sell', async (req, res) => {
             clientOrderId: order.clientOrderId,
             transactTime: order.transactTime,
             fills: order.fills
+          },
+          commission_details: {
+            commission: commission,
+            commissionAsset: commissionAsset,
+            fills: order.fills?.map(fill => ({
+              commission: fill.commission,
+              commissionAsset: fill.commissionAsset
+            })) || []
           },
           testnet: true
         }
@@ -2839,7 +2855,9 @@ app.post('/api/sell', async (req, res) => {
         quantity: executedQty,
         price: avgPrice,
         total: total,
-        status: order.status
+        status: order.status,
+        commission: commission,
+        commissionAsset: commissionAsset
       },
       trade: tradeData ? tradeData[0] : null
     });
@@ -4736,11 +4754,17 @@ async function executeTrade(signal, strategy) {
 
     const executedQty = parseFloat(order.executedQty);
     
+    // Gebühren aus fills extrahieren
+    const { commission, commissionAsset } = extractCommissionFromFills(order.fills);
+
     console.log(`✅ Order ausgeführt!`);
     console.log(`   Order ID: ${order.orderId}`);
     console.log(`   Status: ${order.status}`);
     console.log(`   Ausgeführte Menge: ${executedQty}`);
     console.log(`   Durchschnittspreis: ${avgPrice.toFixed(6)} USDT`);
+    if (commission !== null && commission > 0) {
+      console.log(`   💰 Gebühr: ${commission.toFixed(8)} ${commissionAsset || 'USDT'}`);
+    }
     console.log('═══════════════════════════════════════════════');
     console.log('');
 
@@ -5020,6 +5044,38 @@ async function executeTrade(signal, strategy) {
 }
 
 /**
+ * Extrahiert Gebühren aus Binance Order Fills
+ * @param {Array} fills - Array von Fill-Objekten von Binance
+ * @returns {Object} - { commission: number, commissionAsset: string }
+ */
+function extractCommissionFromFills(fills) {
+  if (!fills || !Array.isArray(fills) || fills.length === 0) {
+    return { commission: null, commissionAsset: null };
+  }
+
+  let totalCommission = 0;
+  let commissionAsset = null;
+
+  fills.forEach(fill => {
+    if (fill.commission) {
+      const commission = parseFloat(fill.commission);
+      if (!isNaN(commission)) {
+        totalCommission += commission;
+        // Verwende das commissionAsset vom ersten Fill (normalerweise alle gleich)
+        if (!commissionAsset && fill.commissionAsset) {
+          commissionAsset = fill.commissionAsset;
+        }
+      }
+    }
+  });
+
+  return {
+    commission: totalCommission > 0 ? totalCommission : null,
+    commissionAsset: commissionAsset || null
+  };
+}
+
+/**
  * Speichert ausgeführten Trade in Supabase
  */
 async function saveTradeToDatabase(order, signal, strategy) {
@@ -5033,6 +5089,9 @@ async function saveTradeToDatabase(order, signal, strategy) {
 
     const executedQty = parseFloat(order.executedQty);
     const total = avgPrice * executedQty;
+
+    // Gebühren aus fills extrahieren
+    const { commission, commissionAsset } = extractCommissionFromFills(order.fills);
 
     // PnL berechnen (bei SELL)
     let pnl = null;
@@ -5073,6 +5132,8 @@ async function saveTradeToDatabase(order, signal, strategy) {
       executed_at: new Date().toISOString(),
       pnl: pnl,
       pnl_percent: pnlPercent,
+      commission: commission,
+      commission_asset: commissionAsset,
       metadata: {
         signal: signal,
         order: {
@@ -5080,6 +5141,14 @@ async function saveTradeToDatabase(order, signal, strategy) {
           clientOrderId: order.clientOrderId,
           transactTime: order.transactTime,
           fills: order.fills
+        },
+        commission_details: {
+          commission: commission,
+          commissionAsset: commissionAsset,
+          fills: order.fills?.map(fill => ({
+            commission: fill.commission,
+            commissionAsset: fill.commissionAsset
+          })) || []
         },
         exit_reason: exitReason, // Auch in metadata für Rückwärtskompatibilität
         exit_details: {
@@ -5131,6 +5200,9 @@ async function saveTradeToDatabase(order, signal, strategy) {
       console.log(`   Preis: ${avgPrice} USDT`);
       console.log(`   Menge: ${executedQty}`);
       console.log(`   Order ID: ${order.orderId}`);
+      if (commission !== null && commission > 0) {
+        console.log(`   💰 Gebühr: ${commission.toFixed(8)} ${commissionAsset || 'USDT'}`);
+      }
       console.log('═══════════════════════════════════════════════');
       
       await logBotEvent('info', `Trade in Datenbank gespeichert: ${signal.action.toUpperCase()}`, {
