@@ -2698,10 +2698,19 @@ app.get('/api/testnet-balance', async (req, res) => {
  * Führt einen direkten Verkauf aus dem Wallet aus
  */
 app.post('/api/sell', async (req, res) => {
+  console.log('');
+  console.log('═══════════════════════════════════════════════');
+  console.log('📥 /api/sell Route aufgerufen');
+  console.log('═══════════════════════════════════════════════');
+  console.log('Request Body:', JSON.stringify(req.body, null, 2));
+  
   try {
     const { asset, quantity, symbol } = req.body;
 
+    console.log(`📊 Empfangene Parameter: asset=${asset}, quantity=${quantity}, symbol=${symbol}`);
+
     if (!asset || !quantity || !symbol) {
+      console.error('❌ Fehlende Parameter:', { asset, quantity, symbol });
       return res.status(400).json({
         success: false,
         error: 'asset, quantity und symbol sind erforderlich'
@@ -2709,52 +2718,77 @@ app.post('/api/sell', async (req, res) => {
     }
 
     if (!binanceClient) {
+      console.error('❌ Binance Client nicht verfügbar');
       return res.status(400).json({
         success: false,
         error: 'Binance Client nicht verfügbar'
       });
     }
+    
+    console.log('✅ Binance Client verfügbar');
 
     // Prüfe verfügbares Guthaben
+    console.log('🔍 Prüfe verfügbares Guthaben...');
     const accountInfo = await binanceClient.accountInfo();
     const balance = accountInfo.balances.find(b => b.asset === asset);
     
+    console.log(`💰 Guthaben für ${asset}:`, balance ? {
+      free: balance.free,
+      locked: balance.locked,
+      total: (parseFloat(balance.free) + parseFloat(balance.locked))
+    } : 'Nicht gefunden');
+    
     if (!balance || parseFloat(balance.free) < parseFloat(quantity)) {
+      console.error(`❌ Nicht genügend ${asset} verfügbar. Verfügbar: ${balance ? parseFloat(balance.free) : 0}, Angefragt: ${quantity}`);
       return res.status(400).json({
         success: false,
         error: `Nicht genügend ${asset} verfügbar. Verfügbar: ${balance ? parseFloat(balance.free) : 0}, Angefragt: ${quantity}`
       });
     }
+    
+    console.log('✅ Genügend Guthaben verfügbar');
 
     // Hole Lot Size Regeln für das Symbol
+    console.log(`🔍 Prüfe Lot Size für ${symbol}...`);
     const lotSize = lotSizes[symbol];
     if (!lotSize) {
+      console.error(`❌ Keine Lot Size Konfiguration für ${symbol} gefunden`);
+      console.log('Verfügbare Lot Sizes:', Object.keys(lotSizes));
       return res.status(400).json({
         success: false,
         error: `Keine Lot Size Konfiguration für ${symbol} gefunden`
       });
     }
+    
+    console.log('✅ Lot Size gefunden:', lotSize);
 
     // Runde Menge auf Step Size
+    console.log(`🔢 Runde Menge: ${quantity} -> Step Size: ${lotSize.stepSize}`);
     let roundedQuantity = Math.floor(parseFloat(quantity) / lotSize.stepSize) * lotSize.stepSize;
     roundedQuantity = parseFloat(roundedQuantity.toFixed(lotSize.decimals));
+    console.log(`✅ Gerundete Menge: ${roundedQuantity}`);
 
     // Prüfe Min/Max
     if (roundedQuantity < lotSize.minQty) {
+      console.error(`❌ Menge ${roundedQuantity} ist kleiner als Minimum ${lotSize.minQty}`);
       return res.status(400).json({
         success: false,
         error: `Menge ${roundedQuantity} ist kleiner als Minimum ${lotSize.minQty}`
       });
     }
     if (roundedQuantity > lotSize.maxQty) {
+      console.error(`❌ Menge ${roundedQuantity} ist größer als Maximum ${lotSize.maxQty}`);
       return res.status(400).json({
         success: false,
         error: `Menge ${roundedQuantity} ist größer als Maximum ${lotSize.maxQty}`
       });
     }
+    
+    console.log('✅ Min/Max Prüfung erfolgreich');
 
     // Prüfe verfügbares Guthaben nochmal mit gerundeter Menge
     if (parseFloat(balance.free) < roundedQuantity) {
+      console.error(`❌ Nicht genügend ${asset} verfügbar nach Rundung. Verfügbar: ${parseFloat(balance.free)}, Benötigt: ${roundedQuantity}`);
       return res.status(400).json({
         success: false,
         error: `Nicht genügend ${asset} verfügbar nach Rundung. Verfügbar: ${parseFloat(balance.free)}, Benötigt: ${roundedQuantity}`
@@ -2771,12 +2805,24 @@ app.post('/api/sell', async (req, res) => {
     console.log('═══════════════════════════════════════════════');
 
     // Verkaufs-Order auf Binance Testnet platzieren
-    const order = await binanceClient.order({
-      symbol: symbol,
-      side: 'SELL',
-      type: 'MARKET',
-      quantity: roundedQuantity.toString()
-    });
+    console.log('📤 Platziere Verkaufs-Order auf Binance...');
+    let order;
+    try {
+      order = await binanceClient.order({
+        symbol: symbol,
+        side: 'SELL',
+        type: 'MARKET',
+        quantity: roundedQuantity.toString()
+      });
+      console.log('✅ Order erfolgreich platziert:', {
+        orderId: order.orderId,
+        status: order.status,
+        executedQty: order.executedQty
+      });
+    } catch (orderError) {
+      console.error('❌ Fehler beim Platzieren der Order:', orderError);
+      throw orderError;
+    }
 
     // Durchschnittspreis berechnen
     const avgPrice = order.fills && order.fills.length > 0
@@ -2863,7 +2909,15 @@ app.post('/api/sell', async (req, res) => {
     });
 
   } catch (error) {
-    console.error('❌ Fehler beim Verkauf:', error);
+    console.error('');
+    console.error('═══════════════════════════════════════════════');
+    console.error('❌ FEHLER BEIM VERKAUF');
+    console.error('═══════════════════════════════════════════════');
+    console.error('Fehler:', error);
+    console.error('Fehler-Message:', error.message);
+    console.error('Fehler-Stack:', error.stack);
+    console.error('═══════════════════════════════════════════════');
+    console.error('');
     res.status(500).json({
       success: false,
       error: error.message || 'Unbekannter Fehler beim Verkauf'
